@@ -3,6 +3,7 @@
   const Dates = root.Dates;
   const Model = root.Model;
   const Day = root.Day;
+  const Events = root.Events;
 
   const SWATCHES = ["#f4e2a8", "#d7ecd9", "#d5e4f7", "#f6d6da"];
   const state = {
@@ -11,6 +12,9 @@
     store: null,
     dialog: null,
     noteBody: null,
+    detail: null,
+    freshId: null,
+    focusTask: null,
     sfIndex: null,
     sfStatus: null,
     sfBusy: false
@@ -18,6 +22,7 @@
 
   const loaded = Model.load(readRaw());
   state.store = loaded.store;
+  const events = Events.manual(state.store);
 
   function readRaw() {
     if (typeof root.__ORGANIZER_STORE_B64 === "string" && root.__ORGANIZER_STORE_B64.length) {
@@ -70,6 +75,11 @@
 
   function todayIso() { return Dates.iso(state.today); }
 
+  function columnDate(partnerId) {
+    const column = partnerId ? columnNode(partnerId) : null;
+    return (column && column.getAttribute("data-date")) || todayIso();
+  }
+
   function partnerById(id) {
     for (let i = 0; i < Config.partners.length; i++) {
       if (Config.partners[i].id === id) return Config.partners[i];
@@ -106,6 +116,7 @@
   function setView(name) {
     if (name !== "day" && name !== "week" && name !== "month" && name !== "archive") return;
     if (state.dialog) closeDialog();
+    state.detail = null;
     state.view = name;
     render();
     postTabs();
@@ -163,6 +174,7 @@
     const column = document.createElement("section");
     column.className = "column";
     column.setAttribute("data-partner", partner.id);
+    column.setAttribute("data-date", date);
     column.style.setProperty("--partner", partner.color);
     column.style.setProperty("--partner-tint", partner.tint);
     column.style.setProperty("--partner-ink", partner.ink);
@@ -248,18 +260,305 @@
     rootEl.appendChild(columns);
   }
 
-  function renderPlain(rootEl, title, copy) {
+  function paint(node, partner) {
+    node.style.setProperty("--partner", partner.color);
+    node.style.setProperty("--partner-tint", partner.tint);
+    node.style.setProperty("--partner-ink", partner.ink);
+  }
+
+  function renderDetail(rootEl) {
+    const header = document.createElement("header");
+    header.className = "day-header";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "text-button back-button";
+    back.textContent = state.detail.from === "archive" ? "Running Account List" : "Back to week";
+    header.appendChild(back);
+    const heading = document.createElement("h1");
+    heading.textContent = Dates.detailDate(Dates.parse(state.detail.date));
+    header.appendChild(heading);
+    rootEl.appendChild(header);
+    const columns = document.createElement("div");
+    columns.className = "columns";
+    const partner = partnerById(state.detail.partnerId);
+    if (partner) columns.appendChild(renderColumn(partner, state.detail.date));
+    rootEl.appendChild(columns);
+  }
+
+  function renderWeek(rootEl) {
+    const header = document.createElement("header");
+    header.className = "day-header";
+    const caption = document.createElement("p");
+    caption.className = "caption";
+    caption.textContent = Dates.weekCaption(state.today);
+    header.appendChild(caption);
+    rootEl.appendChild(header);
+    const columns = document.createElement("div");
+    columns.className = "columns";
+    const rows = Model.weekBoard(state.store, state.today);
+    Config.partners.forEach(function (partner) {
+      const board = document.createElement("section");
+      board.className = "board";
+      board.setAttribute("data-partner", partner.id);
+      paint(board, partner);
+      const name = document.createElement("h2");
+      name.className = "board-name";
+      name.textContent = partner.name;
+      board.appendChild(name);
+      rows.forEach(function (row) {
+        const line = document.createElement("div");
+        line.className = "week-row";
+        const when = document.createElement("span");
+        when.className = "week-when";
+        when.textContent = row.label;
+        line.appendChild(when);
+        const accountName = row.names[partner.id];
+        if (accountName) {
+          const open = document.createElement("button");
+          open.type = "button";
+          open.className = "week-account";
+          open.setAttribute("data-date", row.date);
+          open.setAttribute("data-partner", partner.id);
+          open.textContent = accountName;
+          line.appendChild(open);
+        } else {
+          line.appendChild(Object.assign(document.createElement("span"), { className: "week-empty", textContent: "\u2014" }));
+        }
+        board.appendChild(line);
+      });
+      columns.appendChild(board);
+    });
+    rootEl.appendChild(columns);
+  }
+
+  function countLabel(count) {
+    if (!count) return "No accounts yet";
+    if (count === 1) return "1 account";
+    return count + " accounts";
+  }
+
+  function renderArchive(rootEl) {
     const header = document.createElement("header");
     header.className = "day-header";
     const heading = document.createElement("h1");
     heading.className = "view-heading";
-    heading.textContent = title;
-    const paragraph = document.createElement("p");
-    paragraph.className = "placeholder-copy";
-    paragraph.textContent = copy;
+    heading.textContent = "Running Account List";
+    const caption = document.createElement("p");
+    caption.className = "caption";
+    caption.textContent = "Accounts from the day view move here when their week ends. Open a date to see that day\u2019s notes.";
     header.appendChild(heading);
-    header.appendChild(paragraph);
+    header.appendChild(caption);
     rootEl.appendChild(header);
+    const columns = document.createElement("div");
+    columns.className = "columns";
+    Config.partners.forEach(function (partner) {
+      const rows = Model.runningAccounts(state.store, partner.id, state.today);
+      const board = document.createElement("section");
+      board.className = "board";
+      board.setAttribute("data-partner", partner.id);
+      paint(board, partner);
+      const count = document.createElement("p");
+      count.className = "label";
+      count.textContent = countLabel(rows.length);
+      board.appendChild(count);
+      const name = document.createElement("h2");
+      name.className = "partner-name";
+      name.textContent = partner.name;
+      board.appendChild(name);
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "add-card add-account";
+      add.textContent = "+ Add account";
+      board.appendChild(add);
+      rows.forEach(function (row) {
+        const item = document.createElement("article");
+        item.className = "account-row";
+        if (row.added) item.setAttribute("data-added", row.added.id);
+        const mark = document.createElement("div");
+        mark.className = "account-mark";
+        mark.textContent = Day.initials(row.name);
+        item.appendChild(mark);
+        const body = document.createElement("div");
+        body.className = "account-body";
+        const latest = row.dates.length ? row.dates[row.dates.length - 1] : "";
+        const linked = row.salesforce && row.salesforce.accountId;
+        if (latest || linked) {
+          const open = document.createElement("button");
+          open.type = "button";
+          open.className = "account-open";
+          open.textContent = row.name;
+          if (latest) {
+            open.setAttribute("data-date", latest);
+            open.setAttribute("data-partner", partner.id);
+          } else {
+            open.setAttribute("data-record", linked);
+          }
+          body.appendChild(open);
+        } else {
+          const plain = document.createElement("p");
+          plain.className = "account-open";
+          plain.textContent = row.name;
+          body.appendChild(plain);
+        }
+        if (row.dates.length) {
+          const dates = document.createElement("p");
+          dates.className = "account-dates";
+          row.dates.forEach(function (iso, index) {
+            if (index) dates.appendChild(document.createTextNode(" \u00b7 "));
+            const dateButton = document.createElement("button");
+            dateButton.type = "button";
+            dateButton.className = "date-open";
+            dateButton.setAttribute("data-date", iso);
+            dateButton.setAttribute("data-partner", partner.id);
+            dateButton.textContent = Dates.shortDate(Dates.parse(iso), state.today);
+            dates.appendChild(dateButton);
+          });
+          body.appendChild(dates);
+        }
+        if (row.added && row.added.addedOn) {
+          const added = document.createElement("p");
+          added.className = "added-on";
+          added.textContent = "Added " + Dates.shortDate(Dates.parse(row.added.addedOn), state.today);
+          body.appendChild(added);
+        }
+        item.appendChild(body);
+        if (row.added && !row.dates.length) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "tool remove-added";
+          remove.setAttribute("aria-label", "Remove " + row.name);
+          remove.textContent = "\u00d7";
+          item.appendChild(remove);
+        }
+        board.appendChild(item);
+      });
+      columns.appendChild(board);
+    });
+    rootEl.appendChild(columns);
+    if (state.freshId) {
+      const row = columns.querySelector('[data-added="' + state.freshId + '"]');
+      state.freshId = null;
+      if (row) {
+        row.classList.add("is-new");
+        window.setTimeout(function () { row.classList.remove("is-new"); }, 280);
+      }
+    }
+  }
+
+  function renderMonth(rootEl) {
+    const month = Dates.monthKey(state.today);
+    const header = document.createElement("header");
+    header.className = "day-header month-header";
+    const titles = document.createElement("div");
+    const heading = document.createElement("h1");
+    heading.className = "month-title";
+    heading.textContent = "Important Events";
+    const caption = document.createElement("p");
+    caption.className = "caption";
+    caption.textContent = Dates.monthYear(state.today);
+    titles.appendChild(heading);
+    titles.appendChild(caption);
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "text-button add-event";
+    add.textContent = "+ Add event";
+    header.appendChild(titles);
+    header.appendChild(add);
+    rootEl.appendChild(header);
+    const body = document.createElement("div");
+    body.className = "month-body";
+    const list = events.list(month);
+    if (!list.length) {
+      const empty = document.createElement("p");
+      empty.className = "caption";
+      empty.textContent = "Events you add for " + Dates.MONTHS[state.today.getMonth()] + " appear here.";
+      body.appendChild(empty);
+    }
+    list.forEach(function (event) {
+      const card = document.createElement("article");
+      card.className = "event";
+      card.setAttribute("data-event", event.id);
+      const title = document.createElement("h2");
+      title.textContent = event.title;
+      card.appendChild(title);
+      if (event.date) {
+        const when = document.createElement("p");
+        when.className = "event-date";
+        when.textContent = event.date;
+        card.appendChild(when);
+      }
+      event.tasks.forEach(function (task) {
+        const row = document.createElement("div");
+        row.className = "task" + (task.done ? " done" : "");
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.checked = !!task.done;
+        check.addEventListener("change", function () {
+          events.updateTask(month, event.id, task.id, { done: check.checked });
+          persist();
+          row.classList.toggle("done", check.checked);
+        });
+        const text = document.createElement("input");
+        text.className = "task-text";
+        text.placeholder = "Task";
+        text.value = task.text;
+        text.setAttribute("data-task", task.id);
+        text.addEventListener("input", function () {
+          events.updateTask(month, event.id, task.id, { text: text.value });
+          persist();
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "text-button";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", function () {
+          events.deleteTask(month, event.id, task.id);
+          persist();
+          render();
+        });
+        row.appendChild(check);
+        row.appendChild(text);
+        row.appendChild(remove);
+        card.appendChild(row);
+      });
+      const actions = document.createElement("div");
+      actions.className = "event-actions";
+      const addTask = document.createElement("button");
+      addTask.type = "button";
+      addTask.className = "text-button";
+      addTask.textContent = "+ Add task";
+      addTask.addEventListener("click", function () {
+        const task = events.addTask(month, event.id, "");
+        persist();
+        state.focusTask = task && task.id;
+        render();
+      });
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "text-button edit-event";
+      edit.setAttribute("data-event", event.id);
+      edit.textContent = "Edit";
+      const removeEvent = document.createElement("button");
+      removeEvent.type = "button";
+      removeEvent.className = "text-button";
+      removeEvent.textContent = "Delete";
+      removeEvent.addEventListener("click", function () {
+        events.deleteEvent(month, event.id);
+        persist();
+        render();
+      });
+      actions.appendChild(addTask);
+      actions.appendChild(edit);
+      actions.appendChild(removeEvent);
+      card.appendChild(actions);
+      body.appendChild(card);
+    });
+    rootEl.appendChild(body);
+    if (state.focusTask) {
+      const field = body.querySelector('[data-task="' + state.focusTask + '"]');
+      state.focusTask = null;
+      if (field) field.focus();
+    }
   }
 
   function render() {
@@ -268,19 +567,19 @@
     app.replaceChildren();
     const view = document.createElement("div");
     view.className = "view";
-    if (state.view === "day") renderDay(view);
-    else if (state.view === "week") renderPlain(view, Dates.weekTab(state.today), "Account names from the day view land here.");
-    else if (state.view === "month") renderPlain(view, "Important Events", Dates.monthYear(state.today));
-    else renderPlain(view, "Running Account List", "Accounts from the day view move here when their week ends.");
+    if (state.detail && (state.view === "week" || state.view === "archive")) renderDetail(view);
+    else if (state.view === "day") renderDay(view);
+    else if (state.view === "week") renderWeek(view);
+    else if (state.view === "month") renderMonth(view);
+    else renderArchive(view);
     app.appendChild(view);
   }
 
   function rerenderColumn(partnerId, flipFrom) {
-    if (state.view !== "day") return null;
     const current = columnNode(partnerId);
     const partner = partnerById(partnerId);
     if (!current || !partner) return null;
-    const next = renderColumn(partner, todayIso());
+    const next = renderColumn(partner, current.getAttribute("data-date") || todayIso());
     current.replaceWith(next);
     if (flipFrom) Day.playFlip(next, flipFrom);
     return next;
@@ -288,7 +587,7 @@
 
   function syncCount(partnerId) {
     const column = columnNode(partnerId);
-    const account = accountFor(todayIso(), partnerId);
+    const account = accountFor(columnDate(partnerId), partnerId);
     if (!column || !account) return;
     const filled = Model.filledProspects(account.prospects).length;
     const count = column.querySelector(".count");
@@ -299,7 +598,7 @@
 
   function syncRing(partnerId) {
     const column = columnNode(partnerId);
-    const account = accountFor(todayIso(), partnerId);
+    const account = accountFor(columnDate(partnerId), partnerId);
     const ring = column && column.querySelector(".ring");
     if (ring) ring.classList.toggle("filled", !!(account && Model.paragraphs(account.notes).length));
   }
@@ -323,7 +622,7 @@
     const column = target.closest && target.closest(".column");
     if (!column) return;
     const partnerId = column.getAttribute("data-partner");
-    const date = todayIso();
+    const date = column.getAttribute("data-date") || todayIso();
     const card = target.closest(".card");
     if (!card) return;
     const account = Model.ensureAccount(state.store, date, partnerId);
@@ -378,7 +677,7 @@
       if (!liveCard) return;
       const active = document.activeElement;
       if (active && liveCard.contains(active)) return;
-      const account = accountFor(todayIso(), partnerId);
+      const account = accountFor(columnDate(partnerId), partnerId);
       const prospect = account && account.prospects[index];
       if (!prospect) return;
       if (!Model.isEmptyProspect(prospect)) {
@@ -415,7 +714,7 @@
   }
 
   function addProspect(partnerId) {
-    const account = Model.ensureAccount(state.store, todayIso(), partnerId);
+    const account = Model.ensureAccount(state.store, columnDate(partnerId), partnerId);
     let index = Model.firstEmptyIndex(account.prospects);
     if (index === -1) {
       account.prospects.push(Model.blankProspect());
@@ -438,7 +737,7 @@
     const column = columnNode(partnerId);
     const slot = column && column.querySelector('.card[data-index="' + index + '"]');
     const wrap = slot && slot.closest(".card-slot");
-    const account = accountFor(todayIso(), partnerId);
+    const account = accountFor(columnDate(partnerId), partnerId);
     if (!account || !wrap) return;
     Day.animateOut(wrap, function () {
       account.prospects.splice(index, 1);
@@ -450,7 +749,7 @@
 
   function copyColumn(partnerId) {
     const partner = partnerById(partnerId);
-    const account = accountFor(todayIso(), partnerId) || Model.blankAccount();
+    const account = accountFor(columnDate(partnerId), partnerId) || Model.blankAccount();
     const text = Model.copyText(partner.name, account);
     if (!bridge({ op: "copy", text: text }) && root.navigator && navigator.clipboard) {
       navigator.clipboard.writeText(text);
@@ -491,7 +790,7 @@
   }
 
   function openAccountDialog(partnerId) {
-    const account = Model.ensureAccount(state.store, todayIso(), partnerId);
+    const account = Model.ensureAccount(state.store, columnDate(partnerId), partnerId);
     const dialog = openBackdrop(function () {
       const node = document.createElement("div");
       const title = document.createElement("h2");
@@ -553,7 +852,7 @@
 
   function openNotes(partnerId, prospectIndex, noteKey) {
     const partner = partnerById(partnerId);
-    const account = Model.ensureAccount(state.store, todayIso(), partnerId);
+    const account = Model.ensureAccount(state.store, columnDate(partnerId), partnerId);
     const prospect = prospectIndex == null ? null : account.prospects[prospectIndex];
     const note = Config.notes.filter(function (item) { return item.key === noteKey; })[0];
     const label = note ? note.label : "";
@@ -722,13 +1021,193 @@
     if (note) note.appendChild(bar);
   }
 
+  function openWorkedDay(from, date, partnerId) {
+    state.detail = { from: from, date: date, partnerId: partnerId };
+    render();
+  }
+
+  function openAddAccount(partnerId) {
+    const partner = partnerById(partnerId);
+    const dialog = openBackdrop(function () {
+      const node = document.createElement("div");
+      const title = document.createElement("h2");
+      title.id = "dialog-title";
+      title.textContent = "Add an account";
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "It goes on " + partner.name + "\u2019s running list.";
+      const field = document.createElement("label");
+      field.className = "field";
+      const input = document.createElement("input");
+      input.placeholder = state.sfIndex ? "Search accounts and opportunities" : "Account name";
+      input.autocomplete = "off";
+      field.appendChild(input);
+      const suggestions = document.createElement("div");
+      suggestions.className = "suggestions";
+      const error = document.createElement("p");
+      error.className = "form-error";
+      function chosenName() {
+        const typed = input.value.trim();
+        if (!typed) return;
+        const taken = Model.runningAccounts(state.store, partnerId, state.today).some(function (row) {
+          return Model.fold(row.name) === Model.fold(typed);
+        });
+        suggestions.replaceChildren();
+        error.textContent = "";
+        if (taken) {
+          error.textContent = typed + " is already on " + partner.name + "\u2019s list.";
+          return;
+        }
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "suggestion";
+        const label = document.createElement("span");
+        label.textContent = "Use \u201c" + typed + "\u201d";
+        const detail = document.createElement("span");
+        detail.className = "suggestion-detail";
+        detail.textContent = "Account name only, not linked to Salesforce";
+        use.appendChild(label);
+        use.appendChild(detail);
+        use.addEventListener("click", function () { saveAddedAccount(partnerId, typed); });
+        suggestions.appendChild(use);
+      }
+      input.addEventListener("input", chosenName);
+      input.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        const first = suggestions.querySelector(".suggestion");
+        if (first) first.click();
+      });
+      const actions = document.createElement("div");
+      actions.className = "dialog-actions";
+      actions.appendChild(button("dialog-button", "Cancel", closeDialog));
+      node.appendChild(title);
+      node.appendChild(hint);
+      node.appendChild(field);
+      node.appendChild(suggestions);
+      node.appendChild(error);
+      node.appendChild(actions);
+      return node;
+    });
+    dialog.setAttribute("aria-labelledby", "dialog-title");
+    const input = dialog.querySelector("input");
+    if (input) input.focus();
+  }
+
+  function saveAddedAccount(partnerId, name) {
+    if (!state.store.addedAccounts[partnerId]) state.store.addedAccounts[partnerId] = [];
+    const entry = { id: Model.uuid(), name: name, salesforce: null, addedOn: todayIso() };
+    state.store.addedAccounts[partnerId].push(entry);
+    state.freshId = entry.id;
+    persist();
+    closeDialog();
+    render();
+  }
+
+  function openEventDialog(eventId) {
+    const month = Dates.monthKey(state.today);
+    const existing = eventId ? events.list(month).filter(function (item) { return item.id === eventId; })[0] : null;
+    const dialog = openBackdrop(function () {
+      const node = document.createElement("div");
+      const title = document.createElement("h2");
+      title.id = "dialog-title";
+      title.textContent = existing ? "Edit event" : "Add event";
+      const titleField = document.createElement("label");
+      titleField.className = "field";
+      titleField.appendChild(Object.assign(document.createElement("span"), { textContent: "Title" }));
+      const titleInput = document.createElement("input");
+      titleInput.value = existing ? existing.title : "";
+      titleField.appendChild(titleInput);
+      const dateField = document.createElement("label");
+      dateField.className = "field";
+      dateField.appendChild(Object.assign(document.createElement("span"), { textContent: "Date or range" }));
+      const dateInput = document.createElement("input");
+      dateInput.placeholder = "Optional, such as Oct 12 or Oct 12\u201314";
+      dateInput.value = existing ? existing.date : "";
+      dateField.appendChild(dateInput);
+      const actions = document.createElement("div");
+      actions.className = "dialog-actions";
+      if (existing) {
+        actions.appendChild(button("dialog-button danger", "Delete event", function () {
+          events.deleteEvent(month, existing.id);
+          persist();
+          closeDialog();
+          render();
+        }));
+      }
+      actions.appendChild(button("dialog-button", "Cancel", closeDialog));
+      actions.appendChild(button("dialog-button primary", "Save", function () {
+        const nextTitle = titleInput.value.trim();
+        if (!nextTitle) return;
+        if (existing) events.updateEvent(month, existing.id, { title: nextTitle, date: dateInput.value.trim() });
+        else events.addEvent(month, nextTitle, dateInput.value.trim());
+        persist();
+        closeDialog();
+        render();
+      }));
+      node.appendChild(title);
+      node.appendChild(titleField);
+      node.appendChild(dateField);
+      node.appendChild(actions);
+      titleInput.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          actions.querySelector(".primary").click();
+        }
+      });
+      return node;
+    });
+    dialog.setAttribute("aria-labelledby", "dialog-title");
+    const input = dialog.querySelector("input");
+    if (input) input.focus();
+  }
+
   function onClick(event) {
     const target = event.target.closest("button, a");
     if (!target) return;
+    if (target.classList.contains("back-button")) {
+      state.detail = null;
+      render();
+      return;
+    }
+    if (target.classList.contains("week-account")) {
+      openWorkedDay("week", target.getAttribute("data-date"), target.getAttribute("data-partner"));
+      return;
+    }
+    if (target.classList.contains("add-account")) {
+      openAddAccount(target.closest(".board").getAttribute("data-partner"));
+      return;
+    }
+    if (target.classList.contains("account-open") || target.classList.contains("date-open")) {
+      const date = target.getAttribute("data-date");
+      const record = target.getAttribute("data-record");
+      if (date) openWorkedDay("archive", date, target.getAttribute("data-partner"));
+      else if (record) openSalesforceRecord("Account", record);
+      return;
+    }
+    if (target.classList.contains("remove-added")) {
+      const row = target.closest(".account-row");
+      const partnerId = target.closest(".board").getAttribute("data-partner");
+      const id = row && row.getAttribute("data-added");
+      state.store.addedAccounts[partnerId] = (state.store.addedAccounts[partnerId] || []).filter(function (entry) {
+        return entry.id !== id;
+      });
+      persist();
+      render();
+      return;
+    }
+    if (target.classList.contains("add-event")) {
+      openEventDialog(null);
+      return;
+    }
+    if (target.classList.contains("edit-event")) {
+      openEventDialog(target.getAttribute("data-event"));
+      return;
+    }
     const column = target.closest(".column");
     if (!column) return;
     const partnerId = column.getAttribute("data-partner");
-    const date = todayIso();
+    const date = column.getAttribute("data-date") || todayIso();
     if (target.classList.contains("invite") || target.classList.contains("change-account")) {
       if (state.sfIndex) openSalesforcePicker(partnerId);
       else openAccountDialog(partnerId);
@@ -771,8 +1250,10 @@
 
   function openSalesforcePicker() {}
 
+  function openSalesforceRecord() {}
+
   function moveProspect(partnerId, index, side) {
-    const account = accountFor(todayIso(), partnerId);
+    const account = accountFor(columnDate(partnerId), partnerId);
     const prospect = account && account.prospects[index];
     if (!prospect) return;
     const column = columnNode(partnerId);
@@ -788,7 +1269,7 @@
   const drag = { card: null, slot: null, index: -1, partnerId: "", offsetX: 0, offsetY: 0, height: 0, side: "" };
 
   function previewLine(column, side, hot) {
-    const account = accountFor(todayIso(), drag.partnerId);
+    const account = accountFor(columnDate(drag.partnerId), drag.partnerId);
     const prospect = account.prospects[drag.index];
     const saved = prospect.placement;
     Model.placeProspect(prospect, side);
@@ -843,7 +1324,7 @@
     drag.offsetY = event.clientY - rect.top;
     drag.height = rect.height;
     drag.side = "";
-    drag.home = Model.effectiveSide(accountFor(todayIso(), drag.partnerId).prospects[drag.index]);
+    drag.home = Model.effectiveSide(accountFor(columnDate(drag.partnerId), drag.partnerId).prospects[drag.index]);
     card.style.setProperty("--partner", column.style.getPropertyValue("--partner"));
     card.style.setProperty("--partner-tint", column.style.getPropertyValue("--partner-tint"));
     card.style.setProperty("--partner-ink", column.style.getPropertyValue("--partner-ink"));
@@ -881,7 +1362,7 @@
     before[String(index)] = drag.card.getBoundingClientRect();
     drag.card.remove();
     drag.card = null;
-    const account = accountFor(todayIso(), partnerId);
+    const account = accountFor(columnDate(partnerId), partnerId);
     if (account && side) Model.placeProspect(account.prospects[index], side);
     persist();
     const next = rerenderColumn(partnerId);

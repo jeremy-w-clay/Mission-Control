@@ -196,4 +196,66 @@ assert.strictEqual(Model.copyText("Sabrina Glaser", {
   "2. Lee Park, Account Executive"
 ].join("\n"));
 
+assert.strictEqual(Dates.weekCaption(oct5), "Monday\u2019s account name, copied from the day view.");
+assert.strictEqual(Dates.weekCaption(new Date(2026, 9, 7)), "Account names from the day view, Monday through Wednesday.");
+const board = Model.weekBoard({
+  days: {
+    "2026-10-05": { accounts: { sabrina: { accountName: "  Northwind  " }, joe: { accountName: "" } } }
+  }
+}, oct5);
+assert.strictEqual(board.length, 1);
+assert.strictEqual(board[0].date, "2026-10-05");
+assert.strictEqual(board[0].label, "Mon · Oct 5");
+assert.strictEqual(board[0].names.sabrina, "Northwind");
+assert.strictEqual(board[0].names.joe, "");
+assert.strictEqual(Model.weekBoard({ days: {} }, new Date(2026, 9, 7)).length, 3);
+
+const listStore = {
+  days: {
+    "2026-09-28": { accounts: { sabrina: { accountName: "Acme", notes: "", prospects: [] } } },
+    "2026-09-29": { accounts: { sabrina: { accountName: "Initech", notes: "", prospects: [] } } },
+    "2026-09-30": { accounts: { sabrina: { accountName: "Hooli", notes: "<p>Notes only</p>", prospects: [] }, joe: { accountName: "", notes: "<p>Only notes</p>", prospects: [] } } },
+    "2026-10-01": { accounts: { sabrina: { accountName: "acme", notes: "", prospects: [] } } },
+    "2026-10-02": { accounts: { sabrina: { accountName: "Umbrella", notes: "", prospects: [{ name: "Lee", title: "AE", topLevel: "x", likelyNeeds: "" }], upcomingCall: { date: "2026-10-08", time: "09:00", attendees: [] } } } },
+    "2026-10-03": { accounts: { sabrina: { accountName: "Weekend Co", notes: "", prospects: [] } } },
+    "2026-10-05": { accounts: { sabrina: { accountName: "Northwind", notes: "", prospects: [] } } }
+  },
+  addedAccounts: {
+    sabrina: [{ id: "g1", name: "Globex", salesforce: null, addedOn: "2026-10-05" }],
+    joe: [{ id: "a1", name: "Acme", salesforce: { accountId: "001", opportunityId: "" }, addedOn: "2026-09-01" }]
+  }
+};
+const sabrinaRows = Model.runningAccounts(listStore, "sabrina", oct5);
+assert.deepStrictEqual(sabrinaRows.map(function (row) { return row.name; }), ["Globex", "Umbrella", "acme", "Hooli", "Initech"]);
+assert.deepStrictEqual(sabrinaRows[2].dates, ["2026-09-28", "2026-10-01"]);
+assert.strictEqual(sabrinaRows.some(function (row) { return row.name === "Northwind" || row.name === "Weekend Co"; }), false);
+const joeRows = Model.runningAccounts(listStore, "joe", oct5);
+assert.deepStrictEqual(joeRows.map(function (row) { return row.name; }), ["Acme"]);
+assert.strictEqual(joeRows[0].dates.length, 0);
+assert.strictEqual(joeRows[0].salesforce.accountId, "001");
+const taken = Model.runningAccounts(listStore, "sabrina", oct5).some(function (row) {
+  return Model.fold(row.name) === Model.fold("ACME");
+});
+assert.strictEqual(taken, true);
+
+const Events = require("../Resources/events.js");
+const monthStore = Model.blankStore();
+const source = Events.manual(monthStore);
+assert.deepStrictEqual(source.list("2026-10"), []);
+assert.strictEqual(source.addEvent("2026-10", "   ", ""), null);
+const added = source.addEvent("2026-10", " Offsite ", "Oct 12\u201314");
+assert.strictEqual(added.title, "Offsite");
+assert.strictEqual(source.list("2026-10").length, 1);
+assert.strictEqual(source.list("2026-11").length, 0);
+const task = source.addTask("2026-10", added.id, "");
+source.updateTask("2026-10", added.id, task.id, { text: "Book the room", done: true });
+assert.strictEqual(source.list("2026-10")[0].tasks[0].text, "Book the room");
+assert.strictEqual(source.list("2026-10")[0].tasks[0].done, true);
+source.updateEvent("2026-10", added.id, { title: "Planning offsite", date: "Oct 12" });
+assert.strictEqual(source.list("2026-10")[0].title, "Planning offsite");
+source.deleteTask("2026-10", added.id, task.id);
+assert.strictEqual(source.list("2026-10")[0].tasks.length, 0);
+source.deleteEvent("2026-10", added.id);
+assert.strictEqual(source.list("2026-10").length, 0);
+
 console.log("logic.test.js: ok");

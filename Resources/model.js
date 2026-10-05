@@ -494,6 +494,64 @@
     return found;
   }
 
+  function columnHasWork(account) {
+    if (!account) return false;
+    if (String(account.accountName || "").trim()) return true;
+    if (paragraphs(account.notes).length) return true;
+    if (account.upcomingCall) return true;
+    return filledProspects(account.prospects).length > 0;
+  }
+
+  function weekBoard(store, todayDate) {
+    return dates().weekdaysThrough(todayDate).map(function (date) {
+      const key = dates().iso(date);
+      const day = store.days && store.days[key];
+      const names = {};
+      partnerIds().forEach(function (id) {
+        const account = day && day.accounts && day.accounts[id];
+        const name = account && String(account.accountName || "").trim();
+        names[id] = name || "";
+      });
+      return { date: key, label: dates().weekRow(date), names: names };
+    });
+  }
+
+  function runningAccounts(store, partnerId, todayDate) {
+    const groups = {};
+    Object.keys((store && store.days) || {}).sort().forEach(function (key) {
+      const date = dates().parse(key);
+      if (!date || date.getDay() === 0 || date.getDay() === 6) return;
+      if (!dates().weekFinished(dates().monday(date), todayDate)) return;
+      const account = store.days[key].accounts && store.days[key].accounts[partnerId];
+      if (!columnHasWork(account)) return;
+      const name = String(account.accountName || "").trim();
+      if (!name) return;
+      const folded = fold(name);
+      if (!groups[folded]) groups[folded] = { name: name, dates: [], salesforce: null, added: null };
+      groups[folded].dates.push(key);
+      groups[folded].name = name;
+      if (account.salesforce && account.salesforce.accountId) groups[folded].salesforce = account.salesforce;
+    });
+    const added = (store.addedAccounts && store.addedAccounts[partnerId]) || [];
+    added.forEach(function (entry) {
+      const folded = fold(entry.name);
+      if (!groups[folded]) {
+        groups[folded] = { name: entry.name, dates: [], salesforce: entry.salesforce, added: entry };
+      } else {
+        groups[folded].added = entry;
+        if ((!groups[folded].salesforce || !groups[folded].salesforce.accountId) && entry.salesforce) {
+          groups[folded].salesforce = entry.salesforce;
+        }
+      }
+    });
+    return Object.keys(groups).map(function (key) { return groups[key]; }).sort(function (a, b) {
+      const aDate = a.dates.length ? a.dates[a.dates.length - 1] : ((a.added && a.added.addedOn) || "");
+      const bDate = b.dates.length ? b.dates[b.dates.length - 1] : ((b.added && b.added.addedOn) || "");
+      if (aDate !== bDate) return aDate < bDate ? 1 : -1;
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    });
+  }
+
   function uuid() {
     if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (ch) {
@@ -523,6 +581,9 @@
     fold: fold,
     accountsMatch: accountsMatch,
     upcomingCalls: upcomingCalls,
+    columnHasWork: columnHasWork,
+    weekBoard: weekBoard,
+    runningAccounts: runningAccounts,
     cleanCall: cleanCall,
     uuid: uuid,
     canonical: canonical

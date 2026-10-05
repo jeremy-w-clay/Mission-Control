@@ -181,6 +181,11 @@
     return "last " + WEEKDAYS[date.getDay()];
   }
 
+  function weekCaption(date) {
+    if (date.getDay() === 1) return "Monday\u2019s account name, copied from the day view.";
+    return "Account names from the day view, Monday through " + WEEKDAYS[date.getDay()] + ".";
+  }
+
   function clockNow() {
     const now = new Date();
     let hour = now.getHours();
@@ -225,6 +230,7 @@
     weekdaysThrough: weekdaysThrough,
     weekFinished: weekFinished,
     lastWeekPhrase: lastWeekPhrase,
+    weekCaption: weekCaption,
     clockNow: clockNow
   };
 });
