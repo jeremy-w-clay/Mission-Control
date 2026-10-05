@@ -63,6 +63,7 @@
     const chip = el(extra.button ? "button" : "div", "chip" + (extra.className ? " " + extra.className : ""));
     if (extra.button) chip.type = "button";
     if (extra.title) chip.title = extra.title;
+    if (extra.recordId) chip.setAttribute("data-record", extra.recordId);
     chip.appendChild(el("span", "chip-label", label));
     chip.appendChild(el("span", "chip-value", value));
     return chip;
@@ -87,7 +88,10 @@
     const title = options.linked
       ? el("button", "account-title account-link")
       : el("h3", "account-title");
-    if (options.linked) title.type = "button";
+    if (options.linked) {
+      title.type = "button";
+      title.setAttribute("data-record", options.linked);
+    }
     title.textContent = account.accountName;
     id.appendChild(title);
     if (options.opportunity && options.opportunity !== account.accountName) {
@@ -222,6 +226,60 @@
     return slot;
   }
 
+  function activityLine(item) {
+    if (!item) return "";
+    return [item.label, item.subject, item.dateLabel, item.owner].filter(Boolean).join(" \u00b7 ");
+  }
+
+  // The Account Follow Up band: options has weekday, account, people ([{prospect, linkedin,
+  // salesforceId, activity}]), latest, count ("3 new activities" etc.), open and empty.
+  function renderFollowUp(options) {
+    if (options.empty) {
+      return el("p", "followup-empty", "\u21ba Nothing from " + options.weekday);
+    }
+    const band = el("div", "followup" + (options.open ? " is-open" : ""));
+    const toggle = el("button", "followup-toggle");
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", options.open ? "true" : "false");
+    toggle.appendChild(el("span", "followup-text", "\u21ba " + options.weekday.charAt(0).toUpperCase() + options.weekday.slice(1) + ": " + options.accountName + " \u00b7 " + options.count));
+    toggle.appendChild(el("span", "chevron", "\u2304"));
+    band.appendChild(toggle);
+    const body = el("div", "followup-body");
+    const inner = el("div", "followup-inner");
+    if (options.latest) inner.appendChild(el("p", "followup-latest", "Latest: " + [options.latest.label + (options.latest.who ? " with " + options.latest.who : ""), options.latest.subject, options.latest.dateLabel, options.latest.owner].filter(Boolean).join(" \u00b7 ")));
+    if (options.people.length) {
+      const list = el("ol", "followup-list");
+      options.people.forEach(function (person) {
+        const row = el("li", "followup-person");
+        const head = el("div", "followup-head");
+        if (person.prospect.linkedinUrl) {
+          const link = el("a", "followup-name", person.prospect.name);
+          link.href = person.prospect.linkedinUrl;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          head.appendChild(link);
+        } else {
+          head.appendChild(el("span", "followup-name", person.prospect.name));
+        }
+        if (person.prospect.salesforceId) {
+          const details = el("button", "text-button followup-details", "Details");
+          details.type = "button";
+          details.setAttribute("data-record", person.prospect.salesforceId);
+          head.appendChild(details);
+        }
+        row.appendChild(head);
+        if (person.prospect.title) row.appendChild(el("div", "followup-title", person.prospect.title));
+        const line = activityLine(person.activity);
+        if (line) row.appendChild(el("div", "followup-activity", line));
+        list.appendChild(row);
+      });
+      inner.appendChild(list);
+    }
+    body.appendChild(inner);
+    band.appendChild(body);
+    return band;
+  }
+
   function renderLine(above, below, levelName) {
     const row = el("div", "line");
     row.title = levelName + " and up go above the line. Drag a card across to move it.";
@@ -295,6 +353,7 @@
     renderHero: renderHero,
     renderCard: renderCard,
     renderLine: renderLine,
+    renderFollowUp: renderFollowUp,
     renderAddCard: renderAddCard,
     captureFlip: captureFlip,
     playFlip: playFlip,

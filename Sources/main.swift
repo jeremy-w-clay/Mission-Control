@@ -218,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var closeWhenSaved = false
     var terminateWhenSaved = false
     var lastIndexStamp: String?
+    var pageReady = false
     var refreshRunning = false
     var activityRunning = false
     var pendingActivity: String?
@@ -507,7 +508,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        pushSalesforce(forceIndex: false)
+        pageReady = true
+        pushSalesforce(forceIndex: true)
         runSnapshotsIfNeeded()
     }
 
@@ -530,7 +532,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     func eval(_ source: String) {
-        webView?.evaluateJavaScript(source, completionHandler: nil)
+        let debugging = ProcessInfo.processInfo.environment["ORGANIZER_SNAPSHOT_DIR"] != nil
+        webView?.evaluateJavaScript(source) { _, error in
+            if debugging, let error = error {
+                FileHandle.standardError.write(Data("CHECK eval-error=\(error.localizedDescription) source=\(source.prefix(60))\n".utf8))
+            }
+        }
     }
 
     func evalB64(_ function: String, _ json: String, trailer: String = "") {
@@ -539,11 +546,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     func pushSalesforce(forceIndex: Bool) {
+        // The app can become active before the page has loaded; wait for didFinish.
+        guard pageReady else { return }
         let stamp = indexStamp()
         if forceIndex || (stamp != nil && stamp != lastIndexStamp) {
             if let raw = try? String(contentsOf: supportDir.appendingPathComponent("salesforce-index.json"), encoding: .utf8) {
                 evalB64("receiveSalesforceIndex", raw)
                 lastIndexStamp = stamp
+            }
+            // The cached activity goes with the index so the follow-up band has counts right away.
+            if let cached = try? String(contentsOf: supportDir.appendingPathComponent("salesforce-activity.json"), encoding: .utf8) {
+                evalB64("receiveSalesforceActivity", cached, trailer: ", true")
             }
         }
         let status = (try? String(contentsOf: supportDir.appendingPathComponent("salesforce-status.json"), encoding: .utf8)) ?? "{\"state\":\"none\"}"

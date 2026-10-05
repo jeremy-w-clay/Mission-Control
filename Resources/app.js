@@ -4,6 +4,7 @@
   const Model = root.Model;
   const Day = root.Day;
   const Events = root.Events;
+  const Salesforce = root.Salesforce;
 
   const SWATCHES = ["#f4e2a8", "#d7ecd9", "#d5e4f7", "#f6d6da"];
   const state = {
@@ -16,8 +17,14 @@
     freshId: null,
     focusTask: null,
     sfIndex: null,
+    sfView: null,
     sfStatus: null,
-    sfBusy: false
+    sfBusy: false,
+    activity: null,
+    activityAsked: {},
+    bandOpen: {},
+    picker: null,
+    recordWaiters: {}
   };
 
   const loaded = Model.load(readRaw());
@@ -144,11 +151,32 @@
     });
   }
 
+  function sfView() {
+    if (!state.sfIndex) return null;
+    if (!state.sfView || state.sfView.raw !== state.sfIndex) state.sfView = Salesforce.build(state.sfIndex);
+    return state.sfView;
+  }
+
+  function activityFor(bucket, id) {
+    const entries = state.activity && state.activity[bucket];
+    return (entries && id && entries[id]) || null;
+  }
+
+  function withDateLabel(item) {
+    if (!item) return null;
+    const parsed = item.date ? Dates.parse(item.date) : null;
+    return Object.assign({}, item, { dateLabel: parsed ? Dates.weekdayDate(parsed, state.today) : "" });
+  }
+
   function heroOptions(account, date, partnerId) {
     const calls = account ? Model.upcomingCalls(state.store, account, todayIso()) : [];
     const columnCall = account && account.upcomingCall;
     const chipIsMine = !!(calls.length && calls[0].day === date && calls[0].partnerId === partnerId);
-    const chips = [];
+    const view = sfView();
+    const sfAccount = view ? Salesforce.linkedAccount(view, account) : null;
+    const accountActivity = sfAccount ? activityFor("accounts", sfAccount.id) : null;
+    const chips = view ? Salesforce.chips(view, account, accountActivity && accountActivity.item, state.today) : [];
+    const opportunity = view ? Salesforce.linkedOpportunity(view, account) : null;
     if (calls.length) {
       const soonest = calls[0];
       const when = Dates.callLabel(soonest.date, soonest.time);
@@ -165,9 +193,57 @@
       columnCall: columnCall,
       columnCallLabel: columnCall ? Dates.callLabel(columnCall.date, columnCall.time) : "",
       chipIsMine: chipIsMine,
-      linked: !!(account && account.salesforce && account.salesforce.accountId),
+      linked: (account && account.salesforce && account.salesforce.accountId) || "",
+      opportunity: opportunity ? opportunity.name : "",
       chips: chips
     };
+  }
+
+  function followUpOptions(date, partnerId) {
+    const back = Dates.addDays(Dates.parse(date), -7);
+    const backIso = Dates.iso(back);
+    const account = accountFor(backIso, partnerId);
+    const weekday = Dates.lastWeekPhrase(back);
+    if (!Model.columnHasWork(account)) return { empty: true, weekday: weekday };
+    const view = sfView();
+    const sfAccount = view ? Salesforce.linkedAccount(view, account) : null;
+    const people = Model.orderedProspects(account.prospects).all.map(function (prospect) {
+      const entry = prospect.salesforceId ? activityFor("contacts", prospect.salesforceId) : null;
+      return { prospect: prospect, activity: entry ? withDateLabel(entry.item) : null, entry: entry };
+    });
+    const linkedPeople = people.filter(function (person) { return person.prospect.salesforceId; });
+    let count;
+    if (!linkedPeople.length) count = "no new activity";
+    else if (linkedPeople.some(function (person) { return !person.entry; })) count = "checking activity\u2026";
+    else {
+      const total = linkedPeople.reduce(function (sum, person) { return sum + (person.entry.newCount || 0); }, 0);
+      count = total === 0 ? "no new activity" : total === 1 ? "1 new activity" : total + " new activities";
+    }
+    const latestEntry = sfAccount ? activityFor("accounts", sfAccount.id) : null;
+    return {
+      empty: false,
+      weekday: weekday,
+      accountName: account.accountName || "Untitled account",
+      count: count,
+      latest: latestEntry ? withDateLabel(latestEntry.item) : null,
+      people: people,
+      open: !!state.bandOpen[partnerId],
+      contactIds: linkedPeople.map(function (person) { return person.prospect.salesforceId; }),
+      accountIds: sfAccount ? [sfAccount.id] : [],
+      after: backIso
+    };
+  }
+
+  // Ask the native side for live activity on the follow-up contacts and the hero accounts.
+  // One request per distinct payload per session, repeated only after ten minutes.
+  function requestActivity(contactIds, accountIds, after) {
+    const payload = { contacts: contactIds.slice(0, 60), accounts: accountIds.slice(0, 10), after: after };
+    if (!payload.contacts.length && !payload.accounts.length) return;
+    const key = JSON.stringify(payload);
+    const last = state.activityAsked[key] || 0;
+    if (Date.now() - last < 10 * 60 * 1000) return;
+    state.activityAsked[key] = Date.now();
+    bridge({ op: "salesforce:activity", contacts: payload.contacts, accounts: payload.accounts, after: payload.after });
   }
 
   function renderColumn(partner, date) {
@@ -188,6 +264,20 @@
     const stored = accountFor(date, partner.id);
     const account = stored || Model.blankAccount();
     column.appendChild(Day.renderHero(account, heroOptions(stored, date, partner.id)));
+
+    if (date === todayIso() && !state.detail) {
+      const followUp = followUpOptions(date, partner.id);
+      column.appendChild(Day.renderFollowUp(followUp));
+      if (!followUp.empty && state.sfIndex) {
+        const view = sfView();
+        const heroAccount = view ? Salesforce.linkedAccount(view, stored) : null;
+        requestActivity(followUp.contactIds, followUp.accountIds.concat(heroAccount ? [heroAccount.id] : []), followUp.after);
+      } else if (state.sfIndex) {
+        const view = sfView();
+        const heroAccount = view ? Salesforce.linkedAccount(view, stored) : null;
+        if (heroAccount) requestActivity([], [heroAccount.id], date);
+      }
+    }
 
     const head = document.createElement("div");
     head.className = "prospects-head";
@@ -1204,6 +1294,19 @@
       openEventDialog(target.getAttribute("data-event"));
       return;
     }
+    if (target.classList.contains("followup-toggle")) {
+      const band = target.closest(".followup");
+      const partnerId = target.closest(".column").getAttribute("data-partner");
+      const open = !band.classList.contains("is-open");
+      state.bandOpen[partnerId] = open;
+      band.classList.toggle("is-open", open);
+      target.setAttribute("aria-expanded", open ? "true" : "false");
+      return;
+    }
+    if (target.getAttribute("data-record")) {
+      openSalesforceRecord("", target.getAttribute("data-record"));
+      return;
+    }
     const column = target.closest(".column");
     if (!column) return;
     const partnerId = column.getAttribute("data-partner");
@@ -1244,13 +1347,445 @@
       removeProspect(partnerId, Number(card.getAttribute("data-index")));
       return;
     }
+    if (target.classList.contains("details-button")) {
+      const card = target.closest(".card");
+      const account = accountFor(date, partnerId);
+      const prospect = account && account.prospects[Number(card.getAttribute("data-index"))];
+      if (prospect && prospect.salesforceId) openSalesforceRecord("Contact", prospect.salesforceId);
+      return;
+    }
     if (target.classList.contains("copy-button")) copyColumn(partnerId);
     if (target.classList.contains("choose")) openSalesforcePicker(partnerId);
   }
 
-  function openSalesforcePicker() {}
+  function statusLineNode() {
+    const line = Salesforce.statusLine(state.sfStatus, state.sfBusy, state.sfIndex, state.today);
+    const node = document.createElement("p");
+    node.className = "sf-status";
+    node.appendChild(document.createTextNode(line.text));
+    if (line.action === "refresh") {
+      node.appendChild(document.createTextNode(" "));
+      node.appendChild(button("text-button", "Refresh now", function () {
+        state.sfBusy = true;
+        bridge({ op: "salesforce:refresh" });
+        refreshStatusLines();
+      }));
+    } else if (line.action === "signin") {
+      node.appendChild(document.createTextNode(" "));
+      node.appendChild(button("text-button", "Sign in", function () { bridge({ op: "salesforce:signin" }); }));
+    }
+    return node;
+  }
 
-  function openSalesforceRecord() {}
+  function refreshStatusLines() {
+    document.querySelectorAll(".sf-status").forEach(function (node) { node.replaceWith(statusLineNode()); });
+  }
+
+  function recordLink(id) {
+    const base = (state.sfIndex && state.sfIndex.instanceUrl) || Config.instanceUrl || "";
+    return base.replace(/\/$/, "") + "/" + id;
+  }
+
+  function objectForId(id) {
+    const prefix = String(id || "").slice(0, 3);
+    if (prefix === "001") return "Account";
+    if (prefix === "003") return "Contact";
+    if (prefix === "006") return "Opportunity";
+    if (prefix === "00K") return "OpportunityContactRole";
+    return "";
+  }
+
+  function fetchRecord(object, id, callback) {
+    state.recordWaiters[object + ":" + id] = callback;
+    if (!bridge({ op: "salesforce:record", object: object, id: id })) {
+      callback({ object: object, id: id, data: null, fields: [] });
+    }
+  }
+
+  // The field list shared by the Details dialog and the picker's in-dialog Details.
+  function renderRecordDetails(container, object, id, headingNode) {
+    container.replaceChildren();
+    const loading = document.createElement("p");
+    loading.className = "caption";
+    loading.textContent = "Loading every field\u2026";
+    container.appendChild(loading);
+    fetchRecord(object, id, function (response) {
+      if (!container.isConnected) return;
+      container.replaceChildren();
+      const view = sfView();
+      const record = response.data;
+      if (!record) {
+        const missing = document.createElement("p");
+        missing.className = "caption";
+        missing.textContent = "This record isn\u2019t in the Salesforce copy. It may belong to an account outside your synced accounts.";
+        container.appendChild(missing);
+        return;
+      }
+      if (headingNode) {
+        headingNode.textContent = record.Name || headingNode.textContent;
+        const sub = headingNode.parentElement.querySelector(".dialog-subtitle");
+        if (sub) sub.textContent = Salesforce.subtitle(object, record, view);
+      }
+      const links = document.createElement("p");
+      links.className = "record-links";
+      const open = document.createElement("a");
+      open.href = recordLink(id);
+      open.target = "_blank";
+      open.rel = "noreferrer";
+      open.textContent = "Open in Salesforce";
+      links.appendChild(open);
+      const linkedinField = state.sfIndex && state.sfIndex.linkedinField;
+      const linkedinUrl = object === "Contact" && linkedinField ? record[linkedinField] : "";
+      if (linkedinUrl) {
+        links.appendChild(document.createTextNode(" \u00b7 "));
+        const li = document.createElement("a");
+        li.href = linkedinUrl;
+        li.target = "_blank";
+        li.rel = "noreferrer";
+        li.textContent = "LinkedIn profile";
+        links.appendChild(li);
+      }
+      container.appendChild(links);
+      const rows = Salesforce.fieldRows(object, response.fields, record);
+      const emptyCount = rows.filter(function (row) { return row.empty; }).length;
+      const controls = document.createElement("div");
+      controls.className = "field-controls";
+      const filter = document.createElement("input");
+      filter.placeholder = "Filter fields";
+      filter.autocomplete = "off";
+      const toggle = document.createElement("label");
+      toggle.className = "toggle";
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      toggle.appendChild(check);
+      toggle.appendChild(document.createTextNode(" Show empty fields (" + emptyCount + ")"));
+      controls.appendChild(filter);
+      controls.appendChild(toggle);
+      container.appendChild(controls);
+      const list = document.createElement("dl");
+      list.className = "field-list";
+      container.appendChild(list);
+      function draw() {
+        list.replaceChildren();
+        const query = Salesforce.fold(filter.value);
+        rows.forEach(function (row) {
+          if (row.empty && !check.checked) return;
+          if (query && Salesforce.fold(row.label + " " + row.text).indexOf(query) === -1) return;
+          const dt = document.createElement("dt");
+          dt.textContent = row.label;
+          const dd = document.createElement("dd");
+          if (row.link) {
+            const a = document.createElement("a");
+            a.href = row.link;
+            a.target = "_blank";
+            a.rel = "noreferrer";
+            a.textContent = row.text;
+            dd.appendChild(a);
+          } else {
+            dd.textContent = row.text || "\u2014";
+            if (!row.text) dd.classList.add("empty");
+          }
+          list.appendChild(dt);
+          list.appendChild(dd);
+        });
+      }
+      filter.addEventListener("input", draw);
+      check.addEventListener("change", draw);
+      draw();
+    });
+  }
+
+  function openSalesforceRecord(object, id) {
+    object = object || objectForId(id);
+    if (!object || !id) return;
+    const dialog = openBackdrop(function () {
+      const node = document.createElement("div");
+      node.className = "wide";
+      const title = document.createElement("h2");
+      title.id = "dialog-title";
+      title.textContent = "Details";
+      const subtitle = document.createElement("p");
+      subtitle.className = "dialog-subtitle";
+      const body = document.createElement("div");
+      body.className = "record-body";
+      node.appendChild(title);
+      node.appendChild(subtitle);
+      node.appendChild(body);
+      node.appendChild(statusLineNode());
+      const actions = document.createElement("div");
+      actions.className = "dialog-actions";
+      actions.appendChild(button("dialog-button primary", "Done", closeDialog));
+      node.appendChild(actions);
+      renderRecordDetails(body, object, id, title);
+      return node;
+    });
+    dialog.setAttribute("aria-labelledby", "dialog-title");
+  }
+
+  function openSalesforcePicker(partnerId) {
+    const view = sfView();
+    if (!view) {
+      openAccountDialog(partnerId);
+      return;
+    }
+    const partner = partnerById(partnerId);
+    const date = columnDate(partnerId);
+    const account = Model.ensureAccount(state.store, date, partnerId);
+    const picker = {
+      step: 1,
+      accountId: (account.salesforce && account.salesforce.accountId) || "",
+      opportunityId: (account.salesforce && account.salesforce.opportunityId) || "",
+      selected: {},
+      query: "",
+      detailsId: ""
+    };
+    Model.filledProspects(account.prospects).forEach(function (prospect) {
+      if (prospect.salesforceId) picker.selected[prospect.salesforceId] = true;
+    });
+    if (picker.accountId && view.accountsById[picker.accountId]) picker.step = 2;
+    state.picker = picker;
+
+    const dialog = openBackdrop(function () {
+      const node = document.createElement("div");
+      node.className = "wide picker";
+      return node;
+    });
+    dialog.setAttribute("aria-labelledby", "dialog-title");
+
+    function drawStepOne() {
+      dialog.replaceChildren();
+      const title = document.createElement("h2");
+      title.id = "dialog-title";
+      title.textContent = "Choose the account";
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "Pick the opportunity or account for the " + partner.name + " section. Its contacts come next.";
+      const search = document.createElement("input");
+      search.className = "search";
+      search.placeholder = "Search accounts and opportunities";
+      search.autocomplete = "off";
+      search.value = picker.query;
+      const list = document.createElement("div");
+      list.className = "suggestions";
+      function draw() {
+        list.replaceChildren();
+        const typed = search.value.trim();
+        Salesforce.suggestions(view, partnerId, typed).forEach(function (item, index) {
+          const row = document.createElement("button");
+          row.type = "button";
+          row.className = "suggestion" + (index === 0 ? " is-first" : "");
+          row.appendChild(Object.assign(document.createElement("span"), { textContent: item.name }));
+          row.appendChild(Object.assign(document.createElement("span"), { className: "suggestion-detail", textContent: item.detail }));
+          row.addEventListener("click", function () {
+            picker.accountId = item.accountId;
+            picker.opportunityId = item.opportunityId;
+            account.salesforce = { accountId: item.accountId, opportunityId: item.opportunityId || "" };
+            const sfAccount = view.accountsById[item.accountId];
+            account.accountName = sfAccount ? sfAccount.name : item.name;
+            persist();
+            rerenderColumn(partnerId);
+            picker.step = 2;
+            picker.query = "";
+            drawStepTwo();
+          });
+          list.appendChild(row);
+        });
+        if (typed) {
+          const use = document.createElement("button");
+          use.type = "button";
+          use.className = "suggestion" + (list.childElementCount ? "" : " is-first");
+          use.appendChild(Object.assign(document.createElement("span"), { textContent: "Use \u201c" + typed + "\u201d" }));
+          use.appendChild(Object.assign(document.createElement("span"), { className: "suggestion-detail", textContent: "Account name only, not linked to Salesforce" }));
+          use.addEventListener("click", function () {
+            account.accountName = typed;
+            account.salesforce = null;
+            persist();
+            closeDialog();
+            rerenderColumn(partnerId);
+          });
+          list.appendChild(use);
+        }
+      }
+      search.addEventListener("input", function () { picker.query = search.value; draw(); });
+      search.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        const first = list.querySelector(".suggestion");
+        if (first) first.click();
+      });
+      const actions = document.createElement("div");
+      actions.className = "dialog-actions";
+      actions.appendChild(button("dialog-button", "Cancel", closeDialog));
+      dialog.appendChild(title);
+      dialog.appendChild(hint);
+      dialog.appendChild(search);
+      dialog.appendChild(list);
+      dialog.appendChild(statusLineNode());
+      dialog.appendChild(actions);
+      draw();
+      search.focus();
+    }
+
+    function drawStepTwo() {
+      dialog.replaceChildren();
+      const sfAccount = view.accountsById[picker.accountId];
+      const opp = picker.opportunityId ? view.opportunitiesById[picker.opportunityId] : null;
+      const title = document.createElement("h2");
+      title.id = "dialog-title";
+      title.textContent = "Contacts at " + (sfAccount ? sfAccount.name : account.accountName);
+      const oppLine = document.createElement("p");
+      oppLine.className = "hint opp-line";
+      oppLine.appendChild(document.createTextNode(opp ? "Opportunity: " + opp.name + " \u00b7 " + opp.stage : "No opportunity picked"));
+      oppLine.appendChild(document.createTextNode(" "));
+      oppLine.appendChild(button("text-button", "Change", function () { picker.step = 1; drawStepOne(); }));
+      const search = document.createElement("input");
+      search.className = "search";
+      search.placeholder = "Search by name, title, or email";
+      search.autocomplete = "off";
+      const list = document.createElement("div");
+      list.className = "contact-list";
+      const note = document.createElement("p");
+      note.className = "caption";
+      const footer = document.createElement("div");
+      footer.className = "picker-footer";
+      const summary = document.createElement("span");
+      summary.className = "picker-summary";
+      function selectedCount() {
+        return Object.keys(picker.selected).filter(function (id) { return picker.selected[id]; }).length;
+      }
+      function handTyped() {
+        return Model.filledProspects(account.prospects).filter(function (prospect) { return !prospect.salesforceId; }).length;
+      }
+      function updateSummary() {
+        summary.textContent = selectedCount() + " selected \u00b7 " + (selectedCount() + handTyped()) + "/" + Config.dailyTarget + " prospects";
+      }
+      function draw() {
+        list.replaceChildren();
+        const result = Salesforce.contactsFor(view, picker.accountId, picker.opportunityId, search.value);
+        result.rows.forEach(function (row) {
+          const item = document.createElement("div");
+          item.className = "contact-row" + (picker.selected[row.contact.id] ? " is-selected" : "");
+          const check = document.createElement("input");
+          check.type = "checkbox";
+          check.checked = !!picker.selected[row.contact.id];
+          check.addEventListener("change", function () {
+            picker.selected[row.contact.id] = check.checked;
+            item.classList.toggle("is-selected", check.checked);
+            updateSummary();
+          });
+          const text = document.createElement("div");
+          text.className = "contact-text";
+          text.appendChild(Object.assign(document.createElement("div"), { className: "contact-name", textContent: row.contact.name }));
+          if (row.contact.title) text.appendChild(Object.assign(document.createElement("div"), { className: "contact-title", textContent: row.contact.title }));
+          if (row.badge) text.appendChild(Object.assign(document.createElement("div"), { className: "role-badge", textContent: row.badge }));
+          const tools = document.createElement("div");
+          tools.className = "contact-tools";
+          if (row.contact.linkedin) {
+            const li = document.createElement("a");
+            li.href = row.contact.linkedin;
+            li.target = "_blank";
+            li.rel = "noreferrer";
+            li.textContent = "LinkedIn";
+            tools.appendChild(li);
+          }
+          tools.appendChild(button("text-button", "Details", function () {
+            picker.detailsId = row.contact.id;
+            drawDetails(row.contact.id);
+          }));
+          item.appendChild(check);
+          item.appendChild(text);
+          item.appendChild(tools);
+          list.appendChild(item);
+        });
+        note.textContent = result.total > result.rows.length
+          ? "Showing " + result.rows.length.toLocaleString("en-US") + " of " + result.total.toLocaleString("en-US") + " contacts. Search to narrow the list."
+          : "";
+        updateSummary();
+      }
+      search.addEventListener("input", draw);
+      const actions = document.createElement("div");
+      actions.className = "dialog-actions";
+      actions.appendChild(button("dialog-button", "Cancel", closeDialog));
+      actions.appendChild(button("dialog-button primary", "Update prospects", function () {
+        applyPickerSelection(partnerId, account, picker, view);
+      }));
+      footer.appendChild(summary);
+      footer.appendChild(statusLineNode());
+      footer.appendChild(actions);
+      dialog.appendChild(title);
+      dialog.appendChild(oppLine);
+      dialog.appendChild(search);
+      dialog.appendChild(list);
+      dialog.appendChild(note);
+      dialog.appendChild(footer);
+      draw();
+      search.focus();
+    }
+
+    function drawDetails(contactId) {
+      dialog.replaceChildren();
+      const title = document.createElement("h2");
+      title.id = "dialog-title";
+      const contact = view.contactsById[contactId];
+      title.textContent = contact ? contact.name : "Details";
+      const subtitle = document.createElement("p");
+      subtitle.className = "dialog-subtitle";
+      const body = document.createElement("div");
+      body.className = "record-body";
+      const actions = document.createElement("div");
+      actions.className = "dialog-actions";
+      actions.appendChild(button("dialog-button", "Back to contacts", function () { drawStepTwo(); }));
+      dialog.appendChild(title);
+      dialog.appendChild(subtitle);
+      dialog.appendChild(body);
+      dialog.appendChild(actions);
+      renderRecordDetails(body, "Contact", contactId, title);
+    }
+
+    if (picker.step === 2) drawStepTwo();
+    else drawStepOne();
+  }
+
+  // Keep hand-typed cards, drop unchecked Salesforce cards, add the newly checked contacts.
+  function applyPickerSelection(partnerId, account, picker, view) {
+    const kept = account.prospects.filter(function (prospect) {
+      if (Model.isEmptyProspect(prospect)) return false;
+      if (!prospect.salesforceId) return true;
+      return !!picker.selected[prospect.salesforceId];
+    });
+    const have = {};
+    kept.forEach(function (prospect) { if (prospect.salesforceId) have[prospect.salesforceId] = true; });
+    const added = [];
+    Object.keys(picker.selected).forEach(function (id) {
+      if (!picker.selected[id] || have[id]) return;
+      const contact = view.contactsById[id];
+      if (!contact) return;
+      const prospect = Model.blankProspect();
+      prospect.name = contact.name;
+      prospect.title = contact.title || "";
+      prospect.linkedinUrl = contact.linkedin || "";
+      prospect.salesforceId = contact.id;
+      kept.push(prospect);
+      added.push(prospect);
+    });
+    account.prospects = Model.compactProspects(kept);
+    persist();
+    closeDialog();
+    const column = rerenderColumn(partnerId);
+    if (!column) return;
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    added.forEach(function (prospect, order) {
+      const index = account.prospects.indexOf(prospect);
+      const card = column.querySelector('.card[data-index="' + index + '"]');
+      if (!card || reduce) return;
+      card.classList.add("is-new");
+      card.style.animationDelay = (order * 45) + "ms";
+      window.setTimeout(function () {
+        card.classList.remove("is-new");
+        card.style.animationDelay = "";
+      }, 280 + order * 45);
+    });
+  }
 
   function moveProspect(partnerId, index, side) {
     const account = accountFor(columnDate(partnerId), partnerId);
@@ -1381,14 +1916,36 @@
     markSaveFailed: function () { setStatus("COULD NOT SAVE", true); },
     receiveSalesforceIndex: function (b64) {
       try { state.sfIndex = decodeB64(b64); } catch (err) { state.sfIndex = null; }
-      if (state.view === "day") render();
+      state.sfView = null;
+      if (!state.dialog) render();
     },
     receiveSalesforceStatus: function (b64, busy) {
       try { state.sfStatus = decodeB64(b64); } catch (err) { state.sfStatus = null; }
       state.sfBusy = !!busy;
+      refreshStatusLines();
     },
-    receiveSalesforceRecord: function () {},
-    receiveSalesforceActivity: function () {},
+    receiveSalesforceRecord: function (b64) {
+      let response;
+      try { response = decodeB64(b64); } catch (err) { return; }
+      const key = response.object + ":" + response.id;
+      const waiter = state.recordWaiters[key];
+      delete state.recordWaiters[key];
+      if (waiter) waiter(response);
+    },
+    receiveSalesforceActivity: function (b64) {
+      try { state.activity = decodeB64(b64); } catch (err) { return; }
+      if (state.view === "day" && !state.detail) {
+        Config.partners.forEach(function (partner) {
+          const column = columnNode(partner.id);
+          if (!column) return;
+          const hero = column.querySelector(".hero");
+          const band = column.querySelector(".followup, .followup-empty");
+          const stored = accountFor(todayIso(), partner.id);
+          if (hero) hero.replaceWith(Day.renderHero(stored || Model.blankAccount(), heroOptions(stored, todayIso(), partner.id)));
+          if (band) band.replaceWith(Day.renderFollowUp(followUpOptions(todayIso(), partner.id)));
+        });
+      }
+    },
     openAccountDialog: openAccountDialog,
     openCallDialog: openCallDialog
   };

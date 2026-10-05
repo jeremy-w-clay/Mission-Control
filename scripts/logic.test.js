@@ -258,4 +258,78 @@ assert.strictEqual(source.list("2026-10")[0].tasks.length, 0);
 source.deleteEvent("2026-10", added.id);
 assert.strictEqual(source.list("2026-10").length, 0);
 
+const Salesforce = require("../Resources/salesforce.js");
+const index = {
+  syncedAt: "2026-10-05T11:02:00Z",
+  instanceUrl: "https://clay.my.salesforce.com",
+  linkedinField: "LinkedIn__c",
+  partners: { sabrina: { id: "005S", name: "Sabrina Glaser" }, joe: { id: "005J", name: "Joe Gordon" } },
+  accounts: [
+    { id: "001A", name: "Acme", partnerId: "sabrina", owner: "Pat Owner", lastActivity: "2026-09-30" },
+    { id: "001B", name: "Northwind Logístics", partnerId: "joe", owner: "Lee Owner", lastActivity: "" },
+    { id: "001C", name: "Zeta", partnerId: "", owner: "", lastActivity: "" }
+  ],
+  opportunities: [
+    { id: "006A", name: "Acme - Expansion", accountId: "001A", stage: "2. Discovery", closeDate: "2026-12-01", closed: false, owner: "Sabrina Glaser" },
+    { id: "006B", name: "Acme - Old deal", accountId: "001A", stage: "Closed Lost", closeDate: "2025-01-01", closed: true, owner: "Sabrina Glaser" },
+    { id: "006C", name: "Northwind - New", accountId: "001B", stage: "1. Engage", closeDate: "2026-11-01", closed: false, owner: "Joe Gordon" }
+  ],
+  contacts: [
+    { id: "003A", name: "Dana Reyes", title: "VP Revenue Operations", accountId: "001A", linkedin: "https://linkedin.com/in/dana", email: "dana@acme.com" },
+    { id: "003B", name: "Bob Able", title: "", accountId: "001A", linkedin: "", email: "" },
+    { id: "003C", name: "Cal Zed", title: "Analyst", accountId: "001A", linkedin: "", email: "cal@acme.com" },
+    { id: "003D", name: "Ann Prime", title: "CRO", accountId: "001A", linkedin: "", email: "" },
+    { id: "003E", name: "Other Role", title: "Director", accountId: "001A", linkedin: "", email: "" }
+  ],
+  roles: [
+    { opportunityId: "006A", contactId: "003D", role: "Decision Maker", primary: true },
+    { opportunityId: "006A", contactId: "003C", role: "Influencer", primary: false },
+    { opportunityId: "006B", contactId: "003E", role: "Champion", primary: false }
+  ]
+};
+const view = Salesforce.build(index);
+assert.deepStrictEqual(Salesforce.suggestions(view, "sabrina", "").map(function (s) { return s.name; }), ["Acme - Expansion"]);
+assert.deepStrictEqual(Salesforce.suggestions(view, "sabrina", "ac").map(function (s) { return s.name; }), ["Acme", "Acme - Expansion", "Acme - Old deal"]);
+assert.strictEqual(Salesforce.suggestions(view, "sabrina", "acme")[0].detail, "Account · 5 contacts");
+assert.strictEqual(Salesforce.suggestions(view, "sabrina", "expansion")[0].detail, "Opportunity · Acme · 2. Discovery");
+assert.deepStrictEqual(Salesforce.suggestions(view, "sabrina", "northwind logis").map(function (s) { return s.name; }), ["Northwind Logístics"]);
+assert.deepStrictEqual(Salesforce.suggestions(view, "joe", "n").map(function (s) { return s.name; }).slice(0, 2), ["Northwind - New", "Northwind Logístics"]);
+const contacts = Salesforce.contactsFor(view, "001A", "006A", "");
+assert.deepStrictEqual(contacts.rows.map(function (row) { return row.contact.name; }), ["Ann Prime", "Cal Zed", "Other Role", "Dana Reyes", "Bob Able"]);
+assert.strictEqual(contacts.rows[0].badge, "Primary contact on this opportunity: Decision Maker");
+assert.strictEqual(contacts.rows[1].badge, "Contact role on this opportunity");
+assert.strictEqual(contacts.rows[2].badge, "Contact role on another opportunity here");
+assert.strictEqual(contacts.rows[3].badge, "");
+assert.strictEqual(Salesforce.contactsFor(view, "001A", "006A", "cal@").rows.length, 1);
+assert.strictEqual(Salesforce.accountByName(view, "northwind logistics").id, "001B");
+assert.strictEqual(Salesforce.linkedAccount(view, { accountName: "ACME", salesforce: null }).id, "001A");
+const chips = Salesforce.chips(view, { accountName: "Acme", salesforce: { accountId: "001A", opportunityId: "006A" } }, { date: "2026-10-04" }, oct5);
+assert.deepStrictEqual(chips.map(function (chip) { return chip.label + "=" + chip.value; }), ["Stage=2. Discovery", "Owner=Sabrina Glaser", "Last activity=yesterday"]);
+assert.strictEqual(chips[2].title, "Oct 4, 2026");
+assert.deepStrictEqual(Salesforce.chips(view, { accountName: "Zeta", salesforce: null }, null, oct5), []);
+assert.strictEqual(Salesforce.statusLine({ state: "running" }, false, index, oct5).text, "Refreshing from Salesforce…");
+assert.strictEqual(Salesforce.statusLine({ state: "signin" }, false, index, oct5).text, "Your Salesforce sign-in expired.");
+assert.strictEqual(Salesforce.statusLine(null, false, null, oct5).text, "No Salesforce copy yet.");
+assert.ok(/^Copied from Salesforce today at \d{1,2}:\d{2} [AP]M\.$/.test(Salesforce.statusLine({ state: "ok" }, false, index, oct5).text));
+assert.ok(/^The last refresh failed \(timed out\)\. Showing the copy from today at /.test(Salesforce.statusLine({ state: "error", message: "timed out." }, false, index, oct5).text));
+assert.strictEqual(Salesforce.formatValue({ type: "date" }, "2026-10-05").text, "Oct 5, 2026");
+assert.strictEqual(Salesforce.formatValue({ type: "boolean" }, true).text, "Yes");
+assert.strictEqual(Salesforce.formatValue({ type: "boolean" }, false).text, "");
+assert.strictEqual(Salesforce.formatValue({ type: "currency" }, 1500, { CurrencyIsoCode: "USD" }).text, "$1,500.00");
+assert.strictEqual(Salesforce.formatValue({ type: "percent" }, 12.5).text, "12.5%");
+assert.strictEqual(Salesforce.formatValue({ type: "reference", relationshipName: "Owner" }, "005X", { "Owner.Name": "Pat" }).text, "Pat");
+assert.strictEqual(Salesforce.formatValue({ type: "email" }, "a@b.com").link, "mailto:a@b.com");
+assert.strictEqual(Salesforce.formatValue({ type: "textarea", html: true }, "<p>Hi<br>there</p>").text, "Hi\nthere");
+const rows = Salesforce.fieldRows("Contact", [
+  { name: "Email", label: "Email", type: "email" },
+  { name: "Name", label: "Full Name", type: "string" },
+  { name: "Title", label: "Title", type: "string" },
+  { name: "AccountId", label: "Account ID", type: "reference", relationshipName: "Account" },
+  { name: "OwnerId", label: "Owner ID", type: "reference", relationshipName: "Owner" },
+  { name: "Aardvark__c", label: "Aardvark", type: "string" }
+], { Email: "d@acme.com", Name: "Dana", Title: "", AccountId: "001", "Account.Name": "Acme", OwnerId: "005", "Owner.Name": "Pat", Aardvark__c: "x" });
+assert.deepStrictEqual(rows.map(function (row) { return row.label; }), ["Full Name", "Title", "Account", "Email", "Owner", "Aardvark"]);
+assert.strictEqual(rows[1].empty, true);
+assert.strictEqual(rows[2].text, "Acme");
+
 console.log("logic.test.js: ok");
