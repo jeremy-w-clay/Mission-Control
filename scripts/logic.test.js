@@ -104,4 +104,96 @@ assert.strictEqual(Model.copyText("Ava", copyAccount), [
 assert.strictEqual(Model.copyText("Sabrina Glaser", Model.blankAccount()), "Sabrina Glaser - ");
 assert.strictEqual(Model.copyText("Joe Gordon", { accountName: "Acme", prospects: [{ name: "Ada", title: "", topLevel: "" }] }), "Joe Gordon - Acme\n1. Ada");
 
+const Seniority = require("../Resources/seniority.js");
+const ranks = {
+  "CEO": 100,
+  "Founder": 100,
+  "Co-Founder": 100,
+  "Chief Revenue Officer": 95,
+  "CRO": 95,
+  "CMO": 95,
+  "SVP Sales": 80,
+  "Senior Vice President": 80,
+  "EVP": 85,
+  "VP Revenue Operations": 75,
+  "AVP": 70,
+  "President": 98,
+  "Chair": 97,
+  "Owner": 98,
+  "Partner": 75,
+  "Managing Director": 80,
+  "Chief of Staff": 60,
+  "Head of Growth": 68,
+  "Sr. Director, Marketing": 64,
+  "Dir RevOps": 60,
+  "Director of Marketing Ops": 60,
+  "Executive Director": 66,
+  "Associate Director": 55,
+  "Account Director": 50,
+  "General Manager": 67,
+  "Senior Manager": 50,
+  "Manager": 45,
+  "RevOps Leader": 42,
+  "Principal": 48,
+  "Supervisor": 40,
+  "Senior Analyst": 35,
+  "Intern": 20,
+  "Account Executive": 30
+};
+Object.keys(ranks).forEach(function (title) {
+  assert.strictEqual(Seniority.rank(title), ranks[title], title);
+});
+assert.ok(Object.keys(ranks).length >= 30);
+assert.notStrictEqual(Seniority.rank("Assistant to the CEO"), 100);
+assert.notStrictEqual(Seniority.rank("CRO Manager"), 95);
+assert.strictEqual(Seniority.rank("Head of CRO"), 68);
+assert.strictEqual(Seniority.rank(""), null);
+assert.strictEqual(Seniority.rank("N/A"), null);
+assert.strictEqual(Seniority.rank("unknown"), null);
+assert.strictEqual(Seniority.rank("147"), null);
+assert.strictEqual(Seniority.side(60), "above");
+assert.strictEqual(Seniority.side(59), "below");
+assert.strictEqual(Seniority.side(null), "below");
+assert.strictEqual(Seniority.LINE, Config.lineRank);
+
+const linePeople = [
+  { name: "Lee", title: "Account Executive" },
+  { name: "Dana", title: "VP Revenue Operations" },
+  { name: "Sam", title: "Director of Marketing Ops" },
+  { name: "Pat", title: "" }
+];
+const ordered = Model.orderedProspects(linePeople);
+assert.deepStrictEqual(ordered.above.map(function (person) { return person.name; }), ["Dana", "Sam"]);
+assert.deepStrictEqual(ordered.below.map(function (person) { return person.name; }), ["Lee", "Pat"]);
+
+const moved = { name: "Lee", title: "Account Executive", placement: "" };
+Model.placeProspect(moved, "above");
+assert.strictEqual(moved.placement, "above");
+assert.strictEqual(Model.effectiveSide(moved), "above");
+const director = { name: "Sam", title: "Director of Marketing Ops", placement: "below" };
+Model.placeProspect(director, "above");
+assert.strictEqual(director.placement, "");
+director.placement = "below";
+assert.strictEqual(Model.effectiveSide(director), "below");
+director.placement = "";
+assert.strictEqual(Model.effectiveSide(director), "above");
+
+const tied = [
+  { name: "First", title: "Director" },
+  { name: "Second", title: "Director" }
+];
+assert.deepStrictEqual(Model.orderedProspects(tied).all.map(function (person) { return person.name; }), ["First", "Second"]);
+
+assert.strictEqual(Model.copyText("Sabrina Glaser", {
+  accountName: "Northwind",
+  prospects: [
+    { name: "Lee Park", title: "Account Executive", topLevel: "" },
+    { name: "Dana Reyes", title: "VP Revenue Operations", topLevel: "<p>Asked about credits</p>" }
+  ]
+}), [
+  "Sabrina Glaser - Northwind",
+  "1. Dana Reyes, VP Revenue Operations, Asked about credits",
+  "2. Lee Park, Account Executive"
+].join("\n"));
+
 console.log("logic.test.js: ok");

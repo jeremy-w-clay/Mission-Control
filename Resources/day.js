@@ -222,6 +222,44 @@
     return slot;
   }
 
+  function renderLine(above, below, levelName) {
+    const row = el("div", "line");
+    row.title = levelName + " and up go above the line. Drag a card across to move it.";
+    row.appendChild(el("span", "line-rule"));
+    row.appendChild(el("span", "line-label", "\u2191 " + above + " above \u00b7 " + below + " below \u2193"));
+    row.appendChild(el("span", "line-rule"));
+    return row;
+  }
+
+  function captureFlip(rootNode) {
+    const rects = {};
+    if (!rootNode) return rects;
+    rootNode.querySelectorAll(".card").forEach(function (card) {
+      rects[card.getAttribute("data-index")] = card.getBoundingClientRect();
+    });
+    return rects;
+  }
+
+  function playFlip(rootNode, rects) {
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!rootNode || reduce) return;
+    rootNode.querySelectorAll(".card").forEach(function (card) {
+      if (document.activeElement && card.contains(document.activeElement)) return;
+      const prev = rects[card.getAttribute("data-index")];
+      if (!prev) return;
+      const next = card.getBoundingClientRect();
+      const dx = prev.left - next.left;
+      const dy = prev.top - next.top;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      card.style.transition = "none";
+      card.style.transform = "translate(" + dx + "px, " + dy + "px)";
+      requestAnimationFrame(function () {
+        card.style.transition = "transform var(--duration-base) var(--ease-out)";
+        card.style.transform = "";
+      });
+    });
+  }
+
   function renderAddCard() {
     const button = el("button", "add-card", "+ Add prospect");
     button.type = "button";
@@ -256,7 +294,10 @@
     renderInvite: renderInvite,
     renderHero: renderHero,
     renderCard: renderCard,
+    renderLine: renderLine,
     renderAddCard: renderAddCard,
+    captureFlip: captureFlip,
+    playFlip: playFlip,
     animateOut: animateOut
   };
 });

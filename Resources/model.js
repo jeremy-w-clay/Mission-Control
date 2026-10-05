@@ -13,6 +13,11 @@
     return require("./dates.js");
   }
 
+  function seniority() {
+    if (typeof Seniority !== "undefined") return Seniority;
+    return require("./seniority.js");
+  }
+
   function noteKeys() {
     return config().notes.map(function (note) { return note.key; });
   }
@@ -395,9 +400,48 @@
     return -1;
   }
 
+  function naturalSide(prospect) {
+    return seniority().side(seniority().rank(prospect && prospect.title));
+  }
+
+  function effectiveSide(prospect) {
+    if (prospect && (prospect.placement === "above" || prospect.placement === "below")) return prospect.placement;
+    return naturalSide(prospect);
+  }
+
+  function placeProspect(prospect, side) {
+    prospect.placement = side === naturalSide(prospect) ? "" : side;
+  }
+
+  function orderedProspects(prospects) {
+    const above = [];
+    const below = [];
+    (prospects || []).forEach(function (prospect, index) {
+      if (isEmptyProspect(prospect)) return;
+      const item = { prospect: prospect, index: index };
+      (effectiveSide(prospect) === "above" ? above : below).push(item);
+    });
+    function compare(a, b) {
+      const left = seniority().rank(a.prospect.title);
+      const right = seniority().rank(b.prospect.title);
+      const leftRank = left === null ? -1 : left;
+      const rightRank = right === null ? -1 : right;
+      if (leftRank !== rightRank) return rightRank - leftRank;
+      return a.index - b.index;
+    }
+    above.sort(compare);
+    below.sort(compare);
+    const all = above.concat(below).map(function (item) { return item.prospect; });
+    return {
+      above: above.map(function (item) { return item.prospect; }),
+      below: below.map(function (item) { return item.prospect; }),
+      all: all
+    };
+  }
+
   function copyText(partnerName, account) {
     const header = partnerName + " - " + (account && account.accountName ? account.accountName : "");
-    const people = filledProspects(account && account.prospects);
+    const people = orderedProspects(account && account.prospects).all;
     if (!people.length) return header;
     const noteKey = noteKeys()[0];
     const lines = [header];
@@ -471,6 +515,10 @@
     ensureAccount: ensureAccount,
     filledProspects: filledProspects,
     firstEmptyIndex: firstEmptyIndex,
+    naturalSide: naturalSide,
+    effectiveSide: effectiveSide,
+    placeProspect: placeProspect,
+    orderedProspects: orderedProspects,
     copyText: copyText,
     fold: fold,
     accountsMatch: accountsMatch,

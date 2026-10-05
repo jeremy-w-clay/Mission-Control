@@ -339,6 +339,40 @@ html.native-shell .titlebar { display: none; }
 
 .stack { display: flex; flex-direction: column; }
 
+.line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 14px;
+}
+
+.line-rule {
+  flex: 1;
+  border-top: 2px dotted var(--partner);
+  opacity: 0.6;
+}
+
+.line.is-hot .line-rule { opacity: 1; }
+
+.line-label {
+  color: var(--partner-ink);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  text-transform: lowercase;
+  font-variant-caps: all-small-caps;
+  white-space: nowrap;
+}
+
+.card.is-lifted {
+  box-shadow: var(--shadow-card-lift);
+  transform: scale(1.02);
+  z-index: 20;
+  pointer-events: auto;
+}
+
+.card-placeholder { margin-bottom: 0; }
+
 .card-slot { margin-bottom: 12px; }
 
 .card-slot.is-leaving {

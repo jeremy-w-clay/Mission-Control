@@ -196,10 +196,12 @@
 
     const stack = document.createElement("div");
     stack.className = "stack";
-    account.prospects.forEach(function (prospect, index) {
-      const entering = !!prospect._entering;
-      if (Model.isEmptyProspect(prospect) && !entering) return;
-      delete prospect._entering;
+    const ordered = Model.orderedProspects(account.prospects);
+    const enteringIndex = account.prospects.findIndex(function (prospect) { return prospect._entering; });
+    function appendProspect(prospect) {
+      const index = account.prospects.indexOf(prospect);
+      const entering = index === enteringIndex;
+      if (entering) delete prospect._entering;
       const slot = Day.renderCard(prospect, {
         index: index,
         notes: Config.notes,
@@ -210,7 +212,16 @@
         const card = slot.querySelector(".card");
         window.setTimeout(function () { card.classList.remove("is-new"); }, 280);
       }
-    });
+    }
+    if (ordered.all.length) {
+      if (!ordered.above.length) stack.appendChild(Day.renderLine(0, ordered.below.length, Config.lineLevel));
+      ordered.above.forEach(appendProspect);
+      if (ordered.above.length) stack.appendChild(Day.renderLine(ordered.above.length, ordered.below.length, Config.lineLevel));
+      ordered.below.forEach(appendProspect);
+    }
+    if (enteringIndex !== -1 && Model.isEmptyProspect(account.prospects[enteringIndex])) {
+      appendProspect(account.prospects[enteringIndex]);
+    }
     stack.appendChild(Day.renderAddCard());
     column.appendChild(stack);
 
@@ -264,12 +275,15 @@
     app.appendChild(view);
   }
 
-  function rerenderColumn(partnerId) {
-    if (state.view !== "day") return;
+  function rerenderColumn(partnerId, flipFrom) {
+    if (state.view !== "day") return null;
     const current = columnNode(partnerId);
     const partner = partnerById(partnerId);
-    if (!current || !partner) return;
-    current.replaceWith(renderColumn(partner, todayIso()));
+    if (!current || !partner) return null;
+    const next = renderColumn(partner, todayIso());
+    current.replaceWith(next);
+    if (flipFrom) Day.playFlip(next, flipFrom);
+    return next;
   }
 
   function syncCount(partnerId) {
@@ -366,7 +380,32 @@
       if (active && liveCard.contains(active)) return;
       const account = accountFor(todayIso(), partnerId);
       const prospect = account && account.prospects[index];
-      if (!prospect || !Model.isEmptyProspect(prospect)) return;
+      if (!prospect) return;
+      if (!Model.isEmptyProspect(prospect)) {
+        const domOrder = Array.prototype.map.call(live.querySelectorAll(".card"), function (card) {
+          return card.getAttribute("data-index");
+        }).join(",");
+        const nextOrder = Model.orderedProspects(account.prospects).all.map(function (item) {
+          return String(account.prospects.indexOf(item));
+        }).join(",");
+        if (domOrder === nextOrder) return;
+        const before = Day.captureFlip(live);
+        const active = document.activeElement;
+        const dest = active && active.closest && active.closest(".card");
+        const destIndex = dest && dest.getAttribute("data-index");
+        const field = !active ? ""
+          : active.classList.contains("name") ? ".name"
+          : active.classList.contains("job") ? ".job"
+          : active.classList.contains("grip") ? ".grip"
+          : active.dataset.note ? '.note-body[data-note="' + active.dataset.note + '"]' : "";
+        const next = rerenderColumn(partnerId);
+        if (destIndex && field && next) {
+          const node = next.querySelector('.card[data-index="' + destIndex + '"] ' + field);
+          if (node) node.focus();
+        }
+        if (next) Day.playFlip(next, before);
+        return;
+      }
       Day.animateOut(liveCard.closest(".card-slot"), function () {
         account.prospects = Model.compactProspects(account.prospects);
         persist();
@@ -732,6 +771,123 @@
 
   function openSalesforcePicker() {}
 
+  function moveProspect(partnerId, index, side) {
+    const account = accountFor(todayIso(), partnerId);
+    const prospect = account && account.prospects[index];
+    if (!prospect) return;
+    const column = columnNode(partnerId);
+    const before = Day.captureFlip(column);
+    Model.placeProspect(prospect, side);
+    persist();
+    const next = rerenderColumn(partnerId);
+    const grip = next && next.querySelector('.card[data-index="' + index + '"] .grip');
+    if (grip) grip.focus();
+    if (next) Day.playFlip(next, before);
+  }
+
+  const drag = { card: null, slot: null, index: -1, partnerId: "", offsetX: 0, offsetY: 0, height: 0, side: "" };
+
+  function previewLine(column, side, hot) {
+    const account = accountFor(todayIso(), drag.partnerId);
+    const prospect = account.prospects[drag.index];
+    const saved = prospect.placement;
+    Model.placeProspect(prospect, side);
+    const ordered = Model.orderedProspects(account.prospects);
+    prospect.placement = saved;
+    const stack = column.querySelector(".stack");
+    const line = column.querySelector(".line");
+    const add = column.querySelector(".add-card");
+    if (!stack || !line || !add) return;
+    const before = Day.captureFlip(column);
+    const slots = {};
+    column.querySelectorAll(".card-slot").forEach(function (slot) {
+      const card = slot.querySelector(".card");
+      slots[card ? card.getAttribute("data-index") : String(drag.index)] = slot;
+    });
+    slots[String(drag.index)] = drag.slot;
+    function place(list) {
+      list.forEach(function (item) {
+        const slot = slots[String(account.prospects.indexOf(item))];
+        if (slot) stack.insertBefore(slot, add);
+      });
+    }
+    if (!ordered.above.length) stack.insertBefore(line, add);
+    place(ordered.above);
+    if (ordered.above.length) stack.insertBefore(line, add);
+    place(ordered.below);
+    const label = line.querySelector(".line-label");
+    if (label) label.textContent = "\u2191 " + ordered.above.length + " above \u00b7 " + ordered.below.length + " below \u2193";
+    line.classList.toggle("is-hot", !!hot);
+    Day.playFlip(column, before);
+  }
+
+  function onPointerDown(event) {
+    const grip = event.target.closest && event.target.closest(".grip");
+    if (!grip || event.button !== 0) return;
+    const card = grip.closest(".card");
+    const column = grip.closest(".column");
+    if (!card || !column) return;
+    event.preventDefault();
+    const rect = card.getBoundingClientRect();
+    const slot = card.parentElement;
+    const placeholder = document.createElement("div");
+    placeholder.className = "card-placeholder";
+    placeholder.style.height = rect.height + "px";
+    slot.replaceChild(placeholder, card);
+    document.body.appendChild(card);
+    drag.card = card;
+    drag.slot = slot;
+    drag.index = Number(card.getAttribute("data-index"));
+    drag.partnerId = column.getAttribute("data-partner");
+    drag.offsetX = event.clientX - rect.left;
+    drag.offsetY = event.clientY - rect.top;
+    drag.height = rect.height;
+    drag.side = "";
+    drag.home = Model.effectiveSide(accountFor(todayIso(), drag.partnerId).prospects[drag.index]);
+    card.style.setProperty("--partner", column.style.getPropertyValue("--partner"));
+    card.style.setProperty("--partner-tint", column.style.getPropertyValue("--partner-tint"));
+    card.style.setProperty("--partner-ink", column.style.getPropertyValue("--partner-ink"));
+    card.classList.add("is-lifted");
+    card.style.position = "fixed";
+    card.style.left = rect.left + "px";
+    card.style.top = rect.top + "px";
+    card.style.width = rect.width + "px";
+    card.style.margin = "0";
+    card.setPointerCapture(event.pointerId);
+  }
+
+  function onPointerMove(event) {
+    if (!drag.card) return;
+    drag.card.style.left = (event.clientX - drag.offsetX) + "px";
+    drag.card.style.top = (event.clientY - drag.offsetY) + "px";
+    const column = columnNode(drag.partnerId);
+    const line = column && column.querySelector(".line");
+    if (!line) return;
+    const lineBox = line.getBoundingClientRect();
+    const center = event.clientY - drag.offsetY + drag.height / 2;
+    const side = center < lineBox.top + lineBox.height / 2 ? "above" : "below";
+    if (side === drag.side) return;
+    drag.side = side;
+    previewLine(column, side, side !== drag.home);
+  }
+
+  function onPointerUp() {
+    if (!drag.card) return;
+    const partnerId = drag.partnerId;
+    const index = drag.index;
+    const side = drag.side;
+    const column = columnNode(partnerId);
+    const before = Day.captureFlip(column);
+    before[String(index)] = drag.card.getBoundingClientRect();
+    drag.card.remove();
+    drag.card = null;
+    const account = accountFor(todayIso(), partnerId);
+    if (account && side) Model.placeProspect(account.prospects[index], side);
+    persist();
+    const next = rerenderColumn(partnerId);
+    if (next) Day.playFlip(next, before);
+  }
+
   function decodeB64(b64) {
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
@@ -768,6 +924,13 @@
       event.target.blur();
       return;
     }
+    if (event.target.classList && event.target.classList.contains("grip") && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      const card = event.target.closest(".card");
+      const column = event.target.closest(".column");
+      if (card && column) moveProspect(column.getAttribute("data-partner"), Number(card.getAttribute("data-index")), event.key === "ArrowUp" ? "above" : "below");
+      return;
+    }
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     if (event.metaKey || event.altKey || event.ctrlKey) return;
     if (document.querySelector(".backdrop")) return;
@@ -780,6 +943,10 @@
   const app = document.getElementById("app");
   app.addEventListener("click", onClick);
   app.addEventListener("input", onInput);
+  app.addEventListener("pointerdown", onPointerDown);
+  document.addEventListener("pointermove", onPointerMove);
+  document.addEventListener("pointerup", onPointerUp);
+  document.addEventListener("pointercancel", onPointerUp);
   app.addEventListener("focusin", function (event) {
     if (event.target.classList && event.target.classList.contains("note-body")) showNoteToolbar(event.target);
   });
