@@ -817,7 +817,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let name = (step["name"] as? String) ?? "step-\(index)"
         let js = step["js"] as? String ?? ""
         let wait = step["wait"] as? Double ?? 0.3
-        webView.evaluateJavaScript(js) { [weak self] _, _ in
+        webView.evaluateJavaScript(js) { [weak self] _, error in
+            if let error = error as NSError? {
+                let detail = error.userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+                FileHandle.standardError.write(Data("CHECK step-error name=\(name) \(detail)\n".utf8))
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
                 guard let self = self else { return }
                 let config = WKSnapshotConfiguration()
