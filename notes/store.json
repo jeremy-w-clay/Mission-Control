@@ -1,0 +1,193 @@
+{
+  "addedAccounts" : {
+    "sabrina" : [
+      {
+        "addedOn" : "2026-10-06",
+        "id" : "eb920df0-18d6-41f9-9a8d-b381aa579253",
+        "name" : "Groupon",
+        "salesforce" : null
+      }
+    ]
+  },
+  "days" : {
+    "2026-10-05" : {
+      "accounts" : {
+        "sabrina" : {
+          "accountName" : "",
+          "notes" : "",
+          "prospects" : [
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            }
+          ],
+          "salesforce" : null,
+          "upcomingCall" : null
+        }
+      },
+      "date" : "2026-10-05"
+    },
+    "2026-10-06" : {
+      "accounts" : {
+        "joe" : {
+          "accountName" : "Nexxen",
+          "notes" : "",
+          "prospects" : [
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "",
+              "name" : "",
+              "placement" : "",
+              "salesforceId" : "",
+              "title" : "",
+              "topLevel" : ""
+            }
+          ],
+          "salesforce" : {
+            "accountId" : "001a700000BRKPSAA5",
+            "opportunityId" : ""
+          },
+          "upcomingCall" : null
+        },
+        "sabrina" : {
+          "accountName" : "Groupon",
+          "notes" : "",
+          "prospects" : [
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "linkedin.com\/in\/jamiservidone",
+              "name" : "Jami Servidone",
+              "placement" : "",
+              "salesforceId" : "003a700001G2mlGAAR",
+              "title" : "Head of Food & Beverage Experiences",
+              "topLevel" : "<p>No phone number found on Terra Enrich phone number<\/p>"
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "https:\/\/www.linkedin.com\/in\/carmencampayo",
+              "name" : "Carmen González",
+              "placement" : "",
+              "salesforceId" : "003a700000sQwviAAC",
+              "title" : "GTM AI Manager",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "https:\/\/www.linkedin.com\/in\/jess-griffith-06300418",
+              "name" : "Jess Griffith",
+              "placement" : "",
+              "salesforceId" : "003a700000sR26fAAC",
+              "title" : "Head of Global Managed Channels - CRM - Marketing Operations",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "<p>Was building in Clay last week<\/p>",
+              "linkedinUrl" : "linkedin.com\/in\/gianluca-boscolo",
+              "name" : "Gianluca Boscolo",
+              "placement" : "",
+              "salesforceId" : "003a700001FIbL3AAL",
+              "title" : "Senior Director, Global head of Online Services & Goods",
+              "topLevel" : ""
+            },
+            {
+              "likelyNeeds" : "",
+              "linkedinUrl" : "linkedin.com\/in\/kp-gussenhoven",
+              "name" : "Karel Gussenhoven",
+              "placement" : "",
+              "salesforceId" : "003a700000sQw4WAAS",
+              "title" : "Head Of Sales Operations",
+              "topLevel" : ""
+            }
+          ],
+          "salesforce" : {
+            "accountId" : "001Hs00003XkwUrIAJ",
+            "opportunityId" : ""
+          },
+          "upcomingCall" : null
+        }
+      },
+      "date" : "2026-10-06"
+    }
+  },
+  "months" : {
+
+  },
+  "version" : 1
+}

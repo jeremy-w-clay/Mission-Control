@@ -1,3 +1,11 @@
 Organizer.app
 .snapshots/
 .DS_Store
+
+# The Salesforce copy stays on this Mac. Sign in again and refresh after a restore.
+salesforce.sqlite
+salesforce-index.json
+salesforce-activity.json
+salesforce-config.json
+salesforce-status.json
+salesforce-sync.lock
