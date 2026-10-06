@@ -395,6 +395,7 @@
       name.className = "board-name";
       name.textContent = partner.name;
       board.appendChild(name);
+      board.appendChild(renderWeekPlan(partner));
       rows.forEach(function (row) {
         const line = document.createElement("div");
         line.className = "week-row";
@@ -419,6 +420,70 @@
       columns.appendChild(board);
     });
     rootEl.appendChild(columns);
+    if (state.freshId) {
+      const row = columns.querySelector('[data-target="' + state.freshId + '"]');
+      state.freshId = null;
+      if (row) {
+        row.classList.add("is-new");
+        window.setTimeout(function () { row.classList.remove("is-new"); }, 280);
+      }
+    }
+  }
+
+  function currentWeekKey() {
+    return Dates.iso(Dates.monday(state.today));
+  }
+
+  function renderWeekPlan(partner) {
+    const targets = Model.weekTargets(state.store, currentWeekKey(), partner.id);
+    const plan = document.createElement("div");
+    plan.className = "week-plan";
+    const head = document.createElement("div");
+    head.className = "prospects-head";
+    head.appendChild(Object.assign(document.createElement("p"), { className: "label", textContent: "Targeting" }));
+    const count = document.createElement("span");
+    count.className = "count" + (targets.length >= Config.dailyTarget ? " met" : "");
+    count.textContent = targets.length + "/" + Config.dailyTarget;
+    head.appendChild(count);
+    plan.appendChild(head);
+    targets.forEach(function (entry) {
+      const item = document.createElement("article");
+      item.className = "account-row week-target";
+      item.setAttribute("data-target", entry.id);
+      const mark = document.createElement("div");
+      mark.className = "account-mark";
+      mark.textContent = Day.initials(entry.name);
+      item.appendChild(mark);
+      const body = document.createElement("div");
+      body.className = "account-body";
+      const linked = entry.salesforce && entry.salesforce.accountId;
+      if (linked) {
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "account-open";
+        open.setAttribute("data-record", linked);
+        open.textContent = entry.name;
+        body.appendChild(open);
+      } else {
+        body.appendChild(Object.assign(document.createElement("p"), { className: "account-open", textContent: entry.name }));
+      }
+      item.appendChild(body);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "tool remove-target";
+      remove.setAttribute("aria-label", "Remove " + entry.name);
+      remove.textContent = "\u00d7";
+      item.appendChild(remove);
+      plan.appendChild(item);
+    });
+    if (targets.length < Config.dailyTarget) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "add-card add-target";
+      add.textContent = "+ Add account";
+      plan.appendChild(add);
+    }
+    return plan;
   }
 
   function countLabel(count) {
@@ -1116,6 +1181,109 @@
     render();
   }
 
+  function weekTargetTaken(partnerId, name) {
+    return Model.weekTargets(state.store, currentWeekKey(), partnerId).some(function (entry) {
+      return Model.fold(entry.name) === Model.fold(name);
+    });
+  }
+
+  function saveWeekTarget(partnerId, name, salesforce) {
+    const entry = Model.addWeekTarget(state.store, currentWeekKey(), partnerId, {
+      name: name,
+      salesforce: salesforce || null
+    });
+    if (!entry) return null;
+    state.freshId = entry.id;
+    persist();
+    closeDialog();
+    render();
+    return entry;
+  }
+
+  function openAddTarget(partnerId) {
+    const partner = partnerById(partnerId);
+    const view = sfView();
+    const dialog = openBackdrop(function () {
+      const node = document.createElement("div");
+      const title = document.createElement("h2");
+      title.id = "dialog-title";
+      title.textContent = "Add an account";
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "It goes on " + partner.name + "\u2019s targets for this week.";
+      const field = document.createElement("label");
+      field.className = "field";
+      const input = document.createElement("input");
+      input.placeholder = view ? "Search accounts and opportunities" : "Account name";
+      input.autocomplete = "off";
+      field.appendChild(input);
+      const suggestions = document.createElement("div");
+      suggestions.className = "suggestions";
+      const error = document.createElement("p");
+      error.className = "form-error";
+      function take(name, salesforce) {
+        const typed = String(name || "").trim();
+        if (!typed) return;
+        if (weekTargetTaken(partnerId, typed)) {
+          error.textContent = typed + " is already on " + partner.name + "\u2019s targets this week.";
+          return;
+        }
+        if (!saveWeekTarget(partnerId, typed, salesforce)) {
+          error.textContent = "This week already has " + Config.dailyTarget + " target accounts.";
+        }
+      }
+      function draw() {
+        suggestions.replaceChildren();
+        error.textContent = "";
+        const typed = input.value.trim();
+        if (view) {
+          Salesforce.suggestions(view, partnerId, typed).forEach(function (item, index) {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "suggestion" + (index === 0 ? " is-first" : "");
+            row.appendChild(Object.assign(document.createElement("span"), { textContent: item.name }));
+            row.appendChild(Object.assign(document.createElement("span"), { className: "suggestion-detail", textContent: item.detail }));
+            row.addEventListener("click", function () {
+              const account = view.accountsById[item.accountId];
+              take(account ? account.name : item.name, { accountId: item.accountId, opportunityId: item.opportunityId || "" });
+            });
+            suggestions.appendChild(row);
+          });
+        }
+        if (typed) {
+          const use = document.createElement("button");
+          use.type = "button";
+          use.className = "suggestion" + (suggestions.childElementCount ? "" : " is-first");
+          use.appendChild(Object.assign(document.createElement("span"), { textContent: "Use \u201c" + typed + "\u201d" }));
+          use.appendChild(Object.assign(document.createElement("span"), { className: "suggestion-detail", textContent: "Account name only, not linked to Salesforce" }));
+          use.addEventListener("click", function () { take(typed, null); });
+          suggestions.appendChild(use);
+        }
+      }
+      input.addEventListener("input", draw);
+      input.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        const first = suggestions.querySelector(".suggestion");
+        if (first) first.click();
+      });
+      const actions = document.createElement("div");
+      actions.className = "dialog-actions";
+      actions.appendChild(button("dialog-button", "Cancel", closeDialog));
+      node.appendChild(title);
+      node.appendChild(hint);
+      node.appendChild(field);
+      node.appendChild(suggestions);
+      node.appendChild(error);
+      node.appendChild(actions);
+      if (view) draw();
+      return node;
+    });
+    dialog.setAttribute("aria-labelledby", "dialog-title");
+    const input = dialog.querySelector("input");
+    if (input) input.focus();
+  }
+
   function openAddAccount(partnerId) {
     const partner = partnerById(partnerId);
     const dialog = openBackdrop(function () {
@@ -1262,6 +1430,18 @@
     }
     if (target.classList.contains("week-account")) {
       openWorkedDay("week", target.getAttribute("data-date"), target.getAttribute("data-partner"));
+      return;
+    }
+    if (target.classList.contains("add-target")) {
+      openAddTarget(target.closest(".board").getAttribute("data-partner"));
+      return;
+    }
+    if (target.classList.contains("remove-target")) {
+      const row = target.closest(".week-target");
+      const partnerId = target.closest(".board").getAttribute("data-partner");
+      Model.removeWeekTarget(state.store, currentWeekKey(), partnerId, row && row.getAttribute("data-target"));
+      persist();
+      render();
       return;
     }
     if (target.classList.contains("add-account")) {

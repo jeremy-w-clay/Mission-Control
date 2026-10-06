@@ -727,6 +727,21 @@ html.native-shell .titlebar { display: none; }
 
 .week-empty { color: var(--faint); }
 
+.week-plan {
+  margin: 0 0 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.week-plan .prospects-head { margin: 0 0 8px; }
+
+.week-plan .account-row { margin-top: 10px; }
+
+.week-plan .add-card {
+  margin-top: 10px;
+  padding: 10px 14px;
+}
+
 .back-button { margin: 0 0 8px; }
 
 .account-row {
@@ -771,10 +786,13 @@ html.native-shell .titlebar { display: none; }
   font-size: var(--size-small);
 }
 
-.remove-added { opacity: 0; }
+.remove-added,
+.remove-target { opacity: 0; }
 
 .account-row:hover .remove-added,
-.remove-added:focus { opacity: 1; }
+.account-row:hover .remove-target,
+.remove-added:focus,
+.remove-target:focus { opacity: 1; }
 
 .month-header {
   display: flex;

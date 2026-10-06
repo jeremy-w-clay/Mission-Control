@@ -210,6 +210,55 @@ assert.strictEqual(board[0].names.sabrina, "Northwind");
 assert.strictEqual(board[0].names.joe, "");
 assert.strictEqual(Model.weekBoard({ days: {} }, new Date(2026, 9, 7)).length, 3);
 
+const weekStore = Model.blankStore();
+assert.deepStrictEqual(Model.weekTargets(weekStore, "2026-10-05", "sabrina"), []);
+assert.strictEqual(Model.addWeekTarget(weekStore, "2026-10-05", "sabrina", { name: "  " }), null);
+assert.strictEqual(Model.addWeekTarget(weekStore, "2026-10-06", "sabrina", { name: "Acme" }), null);
+const firstTarget = Model.addWeekTarget(weekStore, "2026-10-05", "sabrina", { name: " Acme " });
+assert.strictEqual(firstTarget.name, "Acme");
+assert.strictEqual(Model.addWeekTarget(weekStore, "2026-10-05", "sabrina", { name: "acme" }), null);
+for (let n = 0; n < 4; n++) {
+  assert.ok(Model.addWeekTarget(weekStore, "2026-10-05", "sabrina", { name: "Account " + n }));
+}
+assert.strictEqual(Model.weekTargets(weekStore, "2026-10-05", "sabrina").length, 5);
+assert.strictEqual(Model.addWeekTarget(weekStore, "2026-10-05", "sabrina", { name: "Sixth" }), null);
+Model.removeWeekTarget(weekStore, "2026-10-05", "sabrina", firstTarget.id);
+assert.strictEqual(Model.weekTargets(weekStore, "2026-10-05", "sabrina").length, 4);
+assert.strictEqual(Model.weekTargets(weekStore, "2026-10-05", "sabrina").some(function (entry) { return entry.name === "Acme"; }), false);
+const joeTarget = Model.addWeekTarget(weekStore, "2026-10-05", "joe", { name: "Globex", salesforce: { accountId: "001xx", opportunityId: "" } });
+assert.strictEqual(joeTarget.salesforce.accountId, "001xx");
+const reloadedWeek = Model.load(weekStore);
+assert.strictEqual(reloadedWeek.changed, false);
+assert.strictEqual(reloadedWeek.store.weeks["2026-10-05"].targets.sabrina.length, 4);
+assert.strictEqual(reloadedWeek.store.weeks["2026-10-05"].targets.joe[0].name, "Globex");
+const overflowWeek = Model.load({
+  weeks: {
+    "2026-10-06": { week: "2026-10-06", targets: { sabrina: [{ id: "t", name: "Nope" }] } },
+    "2026-10-05": {
+      week: "2026-10-05",
+      targets: {
+        nobody: [{ name: "Skip" }],
+        joe: [{ name: "Globex" }, { name: "globex" }],
+        sabrina: [
+          { name: "One" },
+          { name: "Two" },
+          { name: "Three" },
+          { name: "Four" },
+          { name: "Five" },
+          { name: "Six" },
+          { name: "one" }
+        ]
+      }
+    }
+  }
+});
+assert.strictEqual(overflowWeek.changed, true);
+assert.strictEqual(overflowWeek.store.weeks["2026-10-06"], undefined);
+assert.strictEqual(overflowWeek.store.weeks["2026-10-05"].targets.nobody, undefined);
+assert.deepStrictEqual(overflowWeek.store.weeks["2026-10-05"].targets.joe.map(function (entry) { return entry.name; }), ["Globex"]);
+assert.deepStrictEqual(overflowWeek.store.weeks["2026-10-05"].targets.sabrina.map(function (entry) { return entry.name; }), ["One", "Two", "Three", "Four", "Five"]);
+assert.strictEqual(Model.load(overflowWeek.store).changed, false);
+
 const listStore = {
   days: {
     "2026-09-28": { accounts: { sabrina: { accountName: "Acme", notes: "", prospects: [] } } },

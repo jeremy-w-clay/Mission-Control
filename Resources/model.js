@@ -53,7 +53,7 @@
   }
 
   function blankStore() {
-    return { version: 1, days: {}, months: {}, addedAccounts: {} };
+    return { version: 1, days: {}, months: {}, addedAccounts: {}, weeks: {} };
   }
 
   function escapeHtml(text) {
@@ -322,11 +322,62 @@
     };
   }
 
+  function isMondayKey(key) {
+    const date = dates().parse(key);
+    return !!(date && date.getDay() === 1);
+  }
+
+  function normalizeTarget(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const name = typeof raw.name === "string" ? raw.name.trim() : "";
+    if (!name) return null;
+    return {
+      id: typeof raw.id === "string" && raw.id ? raw.id : uuid(),
+      name: name,
+      salesforce: cleanLink(raw.salesforce)
+    };
+  }
+
+  function normalizeWeek(raw, key) {
+    const week = { week: key, targets: {} };
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { week: week, changed: true };
+    let changed = raw.week !== key;
+    Object.keys(raw).forEach(function (field) {
+      if (field !== "week" && field !== "targets") changed = true;
+    });
+    const targets = raw.targets && typeof raw.targets === "object" && !Array.isArray(raw.targets) ? raw.targets : {};
+    if (raw.targets !== targets) changed = true;
+    Object.keys(targets).forEach(function (id) {
+      if (partnerIds().indexOf(id) === -1 || !Array.isArray(targets[id])) {
+        changed = true;
+        return;
+      }
+      const entries = [];
+      const seen = {};
+      targets[id].forEach(function (entry) {
+        if (entries.length >= dailyTarget()) {
+          changed = true;
+          return;
+        }
+        const clean = normalizeTarget(entry);
+        if (!clean || seen[fold(clean.name)]) {
+          changed = true;
+          return;
+        }
+        seen[fold(clean.name)] = 1;
+        entries.push(clean);
+        if (canonical(clean) !== canonical(entry)) changed = true;
+      });
+      week.targets[id] = entries;
+    });
+    return { week: week, changed: changed };
+  }
+
   function load(raw) {
     const store = blankStore();
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { store: store, changed: false };
     let changed = Object.keys(raw).some(function (key) {
-      return key !== "version" && key !== "days" && key !== "months" && key !== "addedAccounts";
+      return key !== "version" && key !== "days" && key !== "months" && key !== "addedAccounts" && key !== "weeks";
     });
     if ("version" in raw && raw.version !== 1) changed = true;
 
@@ -373,6 +424,18 @@
         store.addedAccounts[id] = entries;
       });
     } else if ("addedAccounts" in raw && raw.addedAccounts != null) changed = true;
+
+    if (raw.weeks && typeof raw.weeks === "object" && !Array.isArray(raw.weeks)) {
+      Object.keys(raw.weeks).forEach(function (key) {
+        if (!isMondayKey(key)) {
+          changed = true;
+          return;
+        }
+        const result = normalizeWeek(raw.weeks[key], key);
+        store.weeks[key] = result.week;
+        if (result.changed) changed = true;
+      });
+    } else if ("weeks" in raw && raw.weeks != null) changed = true;
 
     return { store: store, changed: changed };
   }
@@ -552,6 +615,34 @@
     });
   }
 
+  function weekTargets(store, weekKey, partnerId) {
+    const week = store.weeks && store.weeks[weekKey];
+    const list = week && week.targets && week.targets[partnerId];
+    return Array.isArray(list) ? list : [];
+  }
+
+  function addWeekTarget(store, weekKey, partnerId, raw) {
+    if (!isMondayKey(weekKey) || partnerIds().indexOf(partnerId) === -1) return null;
+    const clean = normalizeTarget(raw);
+    if (!clean) return null;
+    if (!store.weeks) store.weeks = {};
+    if (!store.weeks[weekKey]) store.weeks[weekKey] = { week: weekKey, targets: {} };
+    const week = store.weeks[weekKey];
+    if (!week.targets) week.targets = {};
+    if (!Array.isArray(week.targets[partnerId])) week.targets[partnerId] = [];
+    const list = week.targets[partnerId];
+    if (list.length >= dailyTarget()) return null;
+    if (list.some(function (entry) { return fold(entry.name) === fold(clean.name); })) return null;
+    list.push(clean);
+    return clean;
+  }
+
+  function removeWeekTarget(store, weekKey, partnerId, id) {
+    const week = store.weeks && store.weeks[weekKey];
+    if (!week || !week.targets || !Array.isArray(week.targets[partnerId])) return;
+    week.targets[partnerId] = week.targets[partnerId].filter(function (entry) { return entry.id !== id; });
+  }
+
   function uuid() {
     if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (ch) {
@@ -583,6 +674,9 @@
     upcomingCalls: upcomingCalls,
     columnHasWork: columnHasWork,
     weekBoard: weekBoard,
+    weekTargets: weekTargets,
+    addWeekTarget: addWeekTarget,
+    removeWeekTarget: removeWeekTarget,
     runningAccounts: runningAccounts,
     cleanCall: cleanCall,
     uuid: uuid,
